@@ -1,0 +1,2644 @@
+<!--
+================================================================================
+ GeoDüello — Toplantı odası için konum tahmin düellosu (tek dosya)
+================================================================================
+ KURULUM NOTU
+ 0) KEY'SİZ MOD: API key girmezsen oyun yine çalışır. 30 hazır konum kayıtlı pano ID'leriyle
+    Google'ın gömülü (embed) Street View'u üzerinden açılır. Kısıtları: hareket yarıçapı uygulanamaz
+    (oyuncu serbest dolaşır) ve yol üzerindeki sokak adı etiketleri görünebilir. Tam kontrol için key önerilir.
+ 1) Google Maps API key alma:
+    a. https://console.cloud.google.com adresine gir, yeni bir proje oluştur.
+    b. Projeye bir "Faturalandırma" (Billing) hesabı bağla. Google her ay ücretsiz
+       kullanım kotası tanır; 30-35 kişilik bir etkinlik genellikle bu kotada kalır.
+    c. "API'ler ve Hizmetler → Kitaplık" bölümünden **Maps JavaScript API**'yi etkinleştir.
+       (Street View bu API'nin içindedir; ayrıca bir API açmana gerek yok.)
+    d. "Kimlik Bilgileri → Kimlik bilgisi oluştur → API anahtarı".
+    e. Önerilen kısıtlama: Uygulama kısıtlaması = "Web siteleri (HTTP yönlendiren)"
+       →  http://localhost:8000/*  ve  http://127.0.0.1:8000/*
+       API kısıtlaması = yalnızca Maps JavaScript API.
+ 2) Anahtarı aşağıdaki CONFIG.GOOGLE_MAPS_API_KEY alanına yaz
+    (ya da oyunu açınca çıkan kurulum ekranına yapıştır; tarayıcıda saklanır).
+ 3) Çalıştırma — dosyayı çift tıklayıp file:// ile AÇMA (Maps referrer kontrolü yüzünden çalışmaz):
+       Bu dosyanın bulunduğu klasörde bir terminal aç ve şunu çalıştır:
+           python -m http.server 8000
+       Tarayıcıda aç:  http://localhost:8000/index.html
+ 4) (Opsiyonel) Tahmin haritası için CARTO Voyager karoları artık ücretsiz bir key istiyor:
+       https://carto.com/basemaps/apikey → key'i CONFIG.CARTO_API_KEY alanına yaz.
+       Key girilmezse harita otomatik olarak Esri (OpenStreetMap tabanlı) karolarını kullanır (yine çalışır).
+ 5) Oyun sırasında: F = tam ekran, H = kısayol yardımı, Ctrl+Shift+A = yönetim paneli.
+================================================================================
+-->
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeoDüello</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,500;0,700;0,800;0,900;1,900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+<style>
+/* =============================== TEMA =============================== */
+:root{
+  --bg0:#070a1f; --bg1:#0d1142; --bg2:#2b0f5c;
+  --glass:rgba(16,20,58,.55); --line:rgba(255,255,255,.14);
+  --txt:#f4f6ff; --muted:#aab3dc;
+  --cyan:#22d3ee; --pink:#f472b6; --purple:#a78bfa; --lime:#a3e635; --red:#ff4d6d; --yellow:#fde047;
+  --p1:#3b82f6; --p2:#f97316; --p3:#22c55e;
+  --gold:#fbbf24; --silver:#d6deeb; --bronze:#e08a3c;
+  --radius:1.1rem;
+}
+*{box-sizing:border-box}
+/* 1920x1080'de 1rem = 24px; küçük ekranlarda orantılı küçülür */
+html{font-size:clamp(11px, min(1.25vw, 2.222vh), 30px)}
+body{margin:0;height:100vh;overflow:hidden;font-family:'Montserrat',system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--txt);background:var(--bg0);font-size:1rem;line-height:1.35;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+[hidden]{display:none!important}
+#bg{position:fixed;inset:0;z-index:0;background:
+  radial-gradient(60rem 40rem at 12% 8%,rgba(124,58,237,.38),transparent 60%),
+  radial-gradient(50rem 36rem at 88% 92%,rgba(34,211,238,.18),transparent 60%),
+  radial-gradient(40rem 30rem at 80% 10%,rgba(244,114,182,.14),transparent 60%),
+  linear-gradient(135deg,var(--bg1),var(--bg2))}
+#bg::before{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(167,139,250,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(167,139,250,.07) 1px,transparent 1px);background-size:4rem 4rem;-webkit-mask-image:radial-gradient(ellipse at center,#000 25%,transparent 75%);mask-image:radial-gradient(ellipse at center,#000 25%,transparent 75%);animation:gridMove 18s linear infinite}
+@keyframes gridMove{to{background-position:4rem 4rem,4rem 4rem}}
+
+/* =============================== GENEL =============================== */
+.screen{position:fixed;inset:0;display:none;z-index:2;flex-direction:column;align-items:center;justify-content:center;padding:2.5rem 3rem;text-align:center}
+.screen.active{display:flex;animation:scrIn .55s cubic-bezier(.2,.8,.2,1) both}
+@keyframes scrIn{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:none}}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-.6rem)}}
+.glass{background:var(--glass);backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 .6rem 2rem rgba(0,0,0,.35)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;padding:.7rem 1.5rem;border-radius:999px;border:0;cursor:pointer;font-weight:800;font-size:1rem;letter-spacing:.02em;color:#0b0b22;background:linear-gradient(135deg,var(--cyan),var(--purple));box-shadow:0 0 0 1px rgba(255,255,255,.25) inset,0 .5rem 1.6rem rgba(34,211,238,.3);transition:transform .15s,box-shadow .2s,filter .2s,opacity .2s;white-space:nowrap}
+.btn:hover{transform:translateY(-2px);filter:brightness(1.08)}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.38;cursor:not-allowed;transform:none;filter:grayscale(.7)}
+.btn.ghost{background:rgba(255,255,255,.08);color:var(--txt);box-shadow:0 0 0 1px var(--line) inset}
+.btn.danger{background:linear-gradient(135deg,#ff4d6d,#f97316);color:#fff}
+.btn.gold{background:linear-gradient(135deg,#fde047,#f59e0b);color:#2a1600}
+.btn.sm{font-size:.75rem;padding:.45rem .9rem}
+.btn.lg{font-size:1.25rem;padding:.95rem 2.2rem}
+.btn.xl{font-size:1.6rem;padding:1.1rem 3.2rem}
+kbd{display:inline-block;padding:.1em .5em;border-radius:.35em;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-bottom-width:3px;font-family:inherit;font-weight:800;font-size:.85em}
+.title-xl{font-size:5rem;font-weight:900;letter-spacing:-.02em;margin:0;line-height:1}
+.title-l{font-size:3.2rem;font-weight:900;margin:.2em 0;line-height:1.05}
+.title-m{font-size:2.67rem;font-weight:900;margin:0;line-height:1.1}
+.eyebrow{font-size:1rem;font-weight:800;letter-spacing:.25em;text-transform:uppercase;color:var(--cyan)}
+.muted{color:var(--muted)}
+.row{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
+.hint{margin-top:1rem;color:var(--muted);font-size:1rem}
+.spinner{width:4rem;height:4rem;border-radius:50%;border:.4rem solid rgba(255,255,255,.12);border-top-color:var(--cyan);animation:spin 1s linear infinite;margin:1rem auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* =============================== ÜST BAR =============================== */
+#topbar{position:fixed;top:.8rem;right:.8rem;z-index:50;display:flex;gap:.4rem;transition:opacity .3s}
+#topbar button{width:2.5rem;height:2.5rem;border-radius:50%;border:1px solid var(--line);background:rgba(10,12,40,.6);backdrop-filter:blur(8px);cursor:pointer;font-size:1.05rem;display:flex;align-items:center;justify-content:center;transition:transform .15s,background .2s}
+#topbar button:hover{transform:scale(1.1);background:rgba(60,50,140,.8)}
+body.in-play #topbar{opacity:.3}
+body.in-play #topbar:hover{opacity:1}
+
+/* =============================== BOOT / KURULUM =============================== */
+.boot-card{max-width:66rem;width:100%;padding:2rem 2.6rem;text-align:left;max-height:92vh;overflow:auto}
+.boot-card h1{font-size:2.67rem;margin:.2rem 0 1rem;font-weight:900}
+.boot-card ol{margin:.4rem 0 1rem;padding-left:1.6rem;line-height:1.5}
+.boot-card ol li{margin:.25rem 0}
+.boot-card code{background:rgba(255,255,255,.1);padding:.05em .4em;border-radius:.3em;font-size:.9em}
+.boot-card a{color:var(--cyan)}
+.key-row{display:flex;gap:.8rem;margin-top:1rem}
+.key-row input{flex:1;padding:.75rem 1rem;border-radius:.8rem;border:1px solid var(--line);background:rgba(0,0,0,.35);outline:none;font-size:1rem}
+.err-box{background:rgba(255,77,109,.14);border:1px solid rgba(255,77,109,.55);border-radius:.9rem;padding:.8rem 1.1rem;margin:.5rem 0 1rem}
+
+/* =============================== SPLASH =============================== */
+#scr-splash{justify-content:flex-end;padding-bottom:7vh}
+#globe{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);width:min(86vh,72vw);height:min(86vh,72vw);pointer-events:none}
+.splash-content{position:relative;z-index:1}
+.logo{font-size:7rem;font-weight:900;letter-spacing:-.03em;line-height:.95;font-style:italic;filter:drop-shadow(0 0 2rem rgba(124,58,237,.7))}
+.logo .geo{color:#fff}
+.logo .duel{background:linear-gradient(90deg,var(--cyan),var(--pink),var(--yellow));-webkit-background-clip:text;background-clip:text;color:transparent}
+.tagline{font-size:1.35rem;font-weight:700;margin:.6rem 0 1.8rem;color:#dfe3ff;text-shadow:0 2px 12px rgba(0,0,0,.7)}
+.splash-foot{margin-top:1.4rem;color:var(--muted);font-size:.85rem}
+
+/* =============================== KAYIT =============================== */
+#scr-setup{flex-direction:row;gap:2rem;align-items:stretch;text-align:left;padding:2.6rem 3.4rem}
+.setup-left{flex:1.25;display:flex;flex-direction:column;min-width:0}
+.setup-left textarea{flex:1;resize:none;background:rgba(5,8,30,.6);border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.2rem;font-size:1.1rem;line-height:1.5;outline:none;margin-top:.8rem}
+.setup-left textarea:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(34,211,238,.25)}
+.setup-right{flex:1;display:flex;flex-direction:column;gap:1rem;min-width:0}
+.setup-stat{padding:1.2rem 1.4rem}
+.stat-big{font-size:5.5rem;font-weight:900;color:var(--cyan);line-height:1}
+.stat-row{display:flex;gap:1.4rem;align-items:flex-end}
+.warn-box{background:rgba(255,77,109,.14);border:1px solid rgba(255,77,109,.5);border-radius:.9rem;padding:.7rem 1rem;font-size:.95rem}
+.info-box{background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.4);border-radius:.9rem;padding:.7rem 1rem;font-size:.95rem}
+.radio-card{display:flex;gap:.8rem;align-items:flex-start;padding:.8rem 1rem;border-radius:.9rem;border:1px solid var(--line);cursor:pointer;background:rgba(255,255,255,.04);margin-top:.5rem;font-size:.95rem}
+.radio-card input{margin-top:.35rem;transform:scale(1.4);accent-color:var(--cyan)}
+.radio-card.on{border-color:var(--cyan);background:rgba(34,211,238,.1)}
+.radio-card b{display:block;font-size:1.05rem}
+
+/* =============================== KURA =============================== */
+#scr-draw{justify-content:flex-start;padding:1.4rem 2.2rem 1rem}
+.draw-head{display:flex;width:100%;align-items:center;justify-content:space-between;gap:1rem}
+.draw-head h1{margin:0}
+.draw-stage{position:relative;flex:1;width:100%;margin-top:.8rem;overflow:auto;min-height:0}
+.draw-cloud{position:absolute;inset:0}
+.cloud-chip{position:absolute;padding:.4rem .9rem;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid var(--line);font-weight:800;transition:left .35s cubic-bezier(.3,.7,.2,1),top .35s cubic-bezier(.3,.7,.2,1),transform .35s,opacity .4s;white-space:nowrap;box-shadow:0 .4rem 1rem rgba(0,0,0,.3)}
+.vs-grid{display:grid;grid-template-columns:repeat(var(--cols,3),minmax(0,1fr));gap:.7rem 1rem}
+.vs-card{display:flex;align-items:center;gap:.55rem;padding:.55rem .8rem;animation:popIn .45s both;animation-delay:var(--d,0s)}
+.vs-card.bye{border-style:dashed}
+.rbadge{font-weight:900;font-size:.8rem;background:rgba(255,255,255,.1);padding:.3rem .55rem;border-radius:.5rem;color:var(--cyan);flex:none}
+.slot{flex:1;min-width:0;font-weight:800;font-size:1.05rem;padding:.35rem .6rem;border-radius:.6rem;border:2px solid transparent;cursor:grab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:border-color .2s,box-shadow .2s,transform .2s;user-select:none}
+.slot.p1{color:#bfdbfe;background:rgba(59,130,246,.22)}
+.slot.p2{color:#fed7aa;background:rgba(249,115,22,.22)}
+.slot.p3{color:#bbf7d0;background:rgba(34,197,94,.22)}
+.slot.pbye{color:#e9d5ff;background:rgba(167,139,250,.2);flex:0 1 auto}
+.slot.spinning{filter:blur(1.5px);opacity:.75}
+.slot.landed{animation:land .35s}
+@keyframes land{0%{transform:scale(1.25)}100%{transform:scale(1)}}
+.slot.sel{border-color:var(--yellow);box-shadow:0 0 1rem rgba(253,224,71,.6)}
+.slot.dragover{border-color:var(--cyan)}
+.slot.flash{animation:land .5s}
+.vsx{font-weight:900;font-style:italic;color:var(--pink);font-size:.85rem;flex:none}
+.draw-note{margin-top:1rem;font-size:.85rem}
+
+/* =============================== VS / INTRO =============================== */
+#scr-intro{overflow:hidden}
+.silence{position:absolute;top:0;left:0;right:0;padding:.75rem;background:linear-gradient(90deg,#ff4d6d,#a855f7,#ff4d6d);background-size:200% 100%;animation:slide 3s linear infinite;font-weight:900;font-size:1.4rem;letter-spacing:.05em;color:#fff}
+@keyframes slide{to{background-position:200% 0}}
+.vs-wrap{display:flex;align-items:center;justify-content:center;gap:2.4rem;margin:1.6rem 0 2rem;flex-wrap:wrap}
+.vs-name{font-size:4.2rem;font-weight:900;padding:.18em .6em;border-radius:1.2rem;color:#fff;animation:slideL .8s cubic-bezier(.2,.9,.2,1.15) both;animation-delay:var(--d,0s);max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vs-wrap.trio .vs-name{font-size:3rem;max-width:28vw}
+.vs-name.p1{background:linear-gradient(135deg,rgba(59,130,246,.95),rgba(37,99,235,.45));box-shadow:0 0 3rem rgba(59,130,246,.55)}
+.vs-name.p2{background:linear-gradient(135deg,rgba(249,115,22,.95),rgba(234,88,12,.45));box-shadow:0 0 3rem rgba(249,115,22,.55);animation-name:slideR}
+.vs-name.p3{background:linear-gradient(135deg,rgba(34,197,94,.95),rgba(22,163,74,.45));box-shadow:0 0 3rem rgba(34,197,94,.55);animation-name:slideR}
+@keyframes slideL{from{opacity:0;transform:translateX(-40vw) skewX(-12deg)}to{opacity:1;transform:none}}
+@keyframes slideR{from{opacity:0;transform:translateX(40vw) skewX(12deg)}to{opacity:1;transform:none}}
+.vs-x{font-size:5.5rem;font-weight:900;font-style:italic;background:linear-gradient(180deg,#fff,var(--pink));-webkit-background-clip:text;background-clip:text;color:transparent;animation:vsPop .7s .55s both;filter:drop-shadow(0 0 1.5rem rgba(244,114,182,.8))}
+@keyframes vsPop{0%{opacity:0;transform:scale(3) rotate(-20deg)}70%{transform:scale(.9)}100%{opacity:1;transform:none}}
+.turn-warn{font-size:1.7rem;font-weight:800;padding:1rem 2rem;border-radius:1rem;background:rgba(253,224,71,.12);border:2px solid var(--yellow);color:var(--yellow);animation:pulseWarn 1.6s infinite}
+@keyframes pulseWarn{0%,100%{box-shadow:0 0 0 0 rgba(253,224,71,.5)}50%{box-shadow:0 0 0 1rem rgba(253,224,71,0)}}
+
+/* =============================== HAZIR =============================== */
+.ready-avatar{width:10rem;height:10rem;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:5rem;font-weight:900;background:var(--pc);box-shadow:0 0 0 .6rem rgba(255,255,255,.08),0 0 4rem var(--pc);animation:popIn .6s both,bob 2.4s 1s ease-in-out infinite}
+.ready-rules{font-size:1.2rem;font-weight:700;color:#dfe3ff;margin:.6rem 0 1.2rem}
+.ready-status{font-size:1.05rem;margin:0 0 1.3rem;min-height:1.6em}
+.ready-status .row{justify-content:center;margin-top:.6rem}
+
+/* =============================== OYUN (STREET VIEW) =============================== */
+#scr-play{padding:0}
+#scr-play.active{display:block}
+#sv{position:absolute;inset:0;background:#000}
+#sv-cover{position:absolute;inset:0;background:#05060f;z-index:3;pointer-events:none;opacity:0;transition:opacity .7s}
+#sv-cover.on{opacity:1;transition:none}
+.hud{position:absolute;z-index:5}
+.hud-left{top:1rem;left:1rem;padding:.9rem 1.1rem;min-width:19rem;text-align:left}
+.hud-round{font-size:.75rem;letter-spacing:.2em;font-weight:800;color:var(--cyan)}
+.hud-player{font-size:1.5rem;font-weight:900;display:flex;align-items:center;gap:.55rem;margin-top:.15rem}
+.hud-player .dot{width:1rem;height:1rem;border-radius:50%;background:var(--pc);box-shadow:0 0 .8rem var(--pc);flex:none}
+.move-label{font-size:.75rem;color:var(--muted);margin-top:.55rem;display:flex;justify-content:space-between;gap:1rem;font-weight:700}
+.move-label b{color:#fff}
+.move-bar{height:.55rem;background:rgba(255,255,255,.12);border-radius:99px;overflow:hidden;margin:.3rem 0 .7rem}
+.move-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--lime),var(--cyan));transition:width .3s}
+.move-bar i.hot{background:linear-gradient(90deg,#fbbf24,#ff4d6d)}
+.hud-timer{top:1rem;left:50%;transform:translateX(-50%);width:8.4rem;height:8.4rem;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(10,12,40,.6);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);z-index:8}
+.hud-timer svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+.hud-timer .trk{fill:none;stroke:rgba(255,255,255,.12);stroke-width:8}
+.hud-timer .prg{fill:none;stroke:var(--cyan);stroke-width:8;stroke-linecap:round;stroke-dasharray:326.73;transition:stroke .3s}
+.timer-num{font-size:3rem;font-weight:900;line-height:1;position:relative}
+.timer-lbl{font-size:.62rem;letter-spacing:.25em;font-weight:800;color:var(--muted);position:relative;margin-top:.15rem}
+.hud-timer.urgent{animation:urgent .5s ease-in-out infinite alternate}
+.hud-timer.urgent .prg{stroke:var(--red)}
+.hud-timer.urgent .timer-num{color:var(--red)}
+@keyframes urgent{from{box-shadow:0 0 0 0 rgba(255,77,109,.8);transform:translateX(-50%) scale(1)}to{box-shadow:0 0 0 1.3rem rgba(255,77,109,0);transform:translateX(-50%) scale(1.08)}}
+#scr-play.urgent::after{content:'';position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 12rem rgba(255,30,60,.6);animation:vign .5s ease-in-out infinite alternate;z-index:4}
+@keyframes vign{from{opacity:.35}to{opacity:1}}
+.gm-wrap{position:absolute;z-index:6;right:1rem;bottom:2.6rem;width:20rem;height:15rem;display:flex;flex-direction:column;gap:.4rem;opacity:.85;transition:width .3s ease,height .3s ease,right .3s,bottom .3s,opacity .2s}
+.gm-wrap.mini:hover{width:46rem;height:32rem;opacity:1}
+.gm-wrap.full{right:2rem;bottom:2rem;width:calc(100vw - 4rem);height:calc(100vh - 12rem);opacity:1}
+#guess-map{flex:1;border-radius:.9rem;overflow:hidden;border:3px solid var(--pc,var(--cyan));box-shadow:0 1rem 2.5rem rgba(0,0,0,.55);background:#1b2140}
+#guess-map .leaflet-grab,#guess-map.leaflet-container{cursor:crosshair}
+.gm-wrap .btn.guess{width:100%;font-size:1.05rem;padding:.6rem}
+.gm-wrap.full .btn.guess{font-size:1.7rem;padding:.9rem 3rem;width:auto;align-self:center;min-width:24rem}
+.gm-hint{font-size:.7rem;text-align:center;color:#fff;text-shadow:0 1px 3px #000;font-weight:700}
+.gm-wrap.full .gm-hint{font-size:1rem}
+#scr-play.guessing .hud-left{display:none}
+/* Key'siz (embed) mod: iframe'in sol üstündeki adres kartını opak HUD ile kapat; hareket göstergesi uygulanamaz */
+body.sv-embed .hud-left{top:0;left:0;border-radius:0 0 1.2rem 0;background:#0d1035;backdrop-filter:none;-webkit-backdrop-filter:none;min-width:max(21rem,310px);min-height:max(8.5rem,100px);border-top:0;border-left:0}
+/* Dokunmatik ekran: mini harita dokununca büyür */
+.gm-wrap.mini.expanded{width:calc(100vw - 2rem);height:58vh;opacity:1}
+.gm-collapse{display:none;position:absolute;top:.4rem;right:.4rem;z-index:1000;border:0;border-radius:99px;padding:.35rem .8rem;background:rgba(10,12,40,.85);color:#fff;font-weight:800;font-size:.8rem;cursor:pointer}
+.gm-wrap.mini.expanded .gm-collapse{display:block}
+/* Telefon: süre sayacı HUD'un altına insin */
+@media (max-width:700px){
+  .hud-timer{top:calc(max(8.5rem,100px) + .6rem);width:6.5rem;height:6.5rem}
+  body:not(.sv-embed) .hud-timer{top:calc(12rem + .6rem)}
+  .timer-num{font-size:2.4rem}
+  .gm-wrap.mini{width:15rem;height:11rem}
+}
+body.sv-embed .move-label,body.sv-embed .move-bar{display:none}
+body.sv-embed .hud-left .embed-note{display:block}
+.embed-note{display:none;font-size:.7rem;color:var(--muted);margin:.5rem 0 .6rem;font-weight:700}
+#scr-play.guessing #sv{filter:blur(8px) brightness(.45)}
+#pause{position:fixed;inset:0;z-index:45;background:rgba(5,6,20,.78);backdrop-filter:blur(10px);display:none;flex-direction:column;align-items:center;justify-content:center;font-size:5rem;font-weight:900}
+#pause.show{display:flex}
+#pause small{font-size:1.2rem;color:var(--muted);font-weight:700;margin-top:1rem}
+
+/* Harita pinleri */
+.pin-icon{background:none;border:0}
+.pin{width:40px;height:40px;border-radius:50% 50% 50% 0;background:var(--c);transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 6px 14px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;animation:pinDrop .45s cubic-bezier(.2,1.5,.4,1) both}
+.pin span{transform:rotate(45deg);color:#fff;font-weight:900;font-size:17px;font-family:Montserrat,sans-serif}
+@keyframes pinDrop{from{opacity:0;transform:translateY(-30px) rotate(-45deg)}to{opacity:1;transform:rotate(-45deg)}}
+.target-icon{background:none;border:0}
+.target{position:relative;width:64px;height:64px;display:flex;align-items:center;justify-content:center}
+.target .ring{position:absolute;inset:8px;border-radius:50%;border:4px solid #fff;background:rgba(255,77,109,.35);animation:ring 1.4s ease-out infinite}
+.target .flag{font-size:38px;position:relative;filter:drop-shadow(0 4px 6px rgba(0,0,0,.5));animation:pinDrop .5s both}
+@keyframes ring{0%{transform:scale(.5);opacity:1}100%{transform:scale(1.6);opacity:0}}
+
+/* =============================== DEVİR =============================== */
+.big-emoji{font-size:9rem;line-height:1;animation:bob 2s ease-in-out infinite}
+.handoff-line{font-size:3rem;font-weight:900;margin:.8rem 0 .3rem;line-height:1.15}
+.handoff-sub{font-size:1.4rem;color:var(--muted);font-weight:700}
+
+/* =============================== SONUÇ =============================== */
+#scr-reveal{padding:0}
+#scr-reveal.active{display:block}
+.reveal-grid{position:absolute;inset:0;display:grid;grid-template-columns:minmax(0,1fr) 31rem}
+.reveal-map-wrap{position:relative;min-width:0}
+#reveal-map{position:absolute;inset:0;background:#1b2140}
+.reveal-side{padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:.85rem;background:rgba(8,10,34,.92);border-left:1px solid var(--line);overflow:auto;text-align:left}
+.reveal-title{font-size:.8rem;letter-spacing:.2em;font-weight:800;color:var(--cyan)}
+.loc-card{padding:1rem 1.2rem;opacity:0;transform:translateY(1rem) scale(.96);transition:.6s cubic-bezier(.2,1.2,.3,1)}
+.loc-card.show{opacity:1;transform:none}
+.loc-top{display:flex;gap:.9rem;align-items:center}
+.loc-flag{font-size:3.6rem;line-height:1}
+.flag-img{vertical-align:middle;border-radius:.25em;box-shadow:0 .2rem .6rem rgba(0,0,0,.4)}
+.loc-country{font-size:1.6rem;font-weight:900;line-height:1.1}
+.loc-city{font-size:1.1rem;color:var(--cyan);font-weight:800}
+.loc-desc{font-size:1rem;color:#dfe3ff;margin-top:.5rem}
+.rp{padding:.85rem 1.1rem;border-left:.45rem solid var(--pc);position:relative;transition:box-shadow .4s}
+.rp.winner{box-shadow:0 0 0 2px var(--gold),0 0 2rem rgba(251,191,36,.45)}
+.rp.winner::after{content:'🏆';position:absolute;right:.9rem;top:.55rem;font-size:2rem;animation:popIn .5s both}
+.rp-name{font-size:1.45rem;font-weight:900;color:var(--pc);padding-right:2.6rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rp-stats{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.25rem}
+.rp-stats small{display:block;font-size:.62rem;letter-spacing:.15em;color:var(--muted);font-weight:800;text-transform:uppercase}
+.rp-stats b{font-size:1.75rem;font-weight:900;font-variant-numeric:tabular-nums}
+.rp-bonus{font-size:1rem;color:#dfe3ff;margin-top:.25rem;min-height:1.3em}
+.rp-bonus em{font-style:normal;color:var(--gold);font-weight:900}
+.win-banner{position:absolute;left:50%;top:1.2rem;transform:translate(-50%,-180%);z-index:1001;padding:.7rem 2.4rem;border-radius:1.2rem;font-size:2.67rem;font-weight:900;background:linear-gradient(135deg,rgba(253,224,71,.97),rgba(244,114,182,.97));color:#1a0b2e;box-shadow:0 1rem 3rem rgba(0,0,0,.5);transition:transform .7s cubic-bezier(.2,1.4,.3,1);white-space:nowrap;max-width:94%;overflow:hidden;text-overflow:ellipsis}
+.win-banner.show{transform:translate(-50%,0)}
+.win-banner.neutral{background:linear-gradient(135deg,#c7d2fe,#a78bfa)}
+.reveal-actions{margin-top:auto;display:flex;flex-direction:column;gap:.6rem;opacity:0;pointer-events:none;transition:opacity .4s}
+.reveal-actions.show{opacity:1;pointer-events:auto}
+
+/* =============================== LİDER TABLOSU =============================== */
+#scr-leader{justify-content:flex-start;padding:1.3rem 2.2rem 1rem}
+.lb-top{display:flex;width:100%;align-items:center;justify-content:space-between;gap:1rem}
+.lb-top h1{margin:0}
+.lb{width:100%;flex:1;min-height:0;display:flex;flex-direction:column;margin-top:.7rem;text-align:left}
+.lb-heads{display:grid;grid-template-columns:repeat(var(--cols,1),minmax(0,1fr));column-gap:1.4rem}
+.lb-hrow,.lb-row{display:grid;grid-template-columns:3.2rem minmax(0,1.3fr) minmax(0,1fr) 6.4rem 5.8rem 3.4rem;align-items:center;gap:.6rem}
+.lb-hrow{font-size:.66rem;letter-spacing:.16em;color:var(--muted);font-weight:800;padding:0 .9rem .35rem;text-transform:uppercase}
+.lb-hrow .r{text-align:right}.lb-hrow .c{text-align:center}
+.lb-grid{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;display:grid;grid-template-columns:minmax(0,1fr);row-gap:.22rem;align-content:start}
+.draw-head,#scr-leader .lb-top{padding-right:14.5rem}
+.lb-grid::-webkit-scrollbar{display:none}
+.lb-grid.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:repeat(var(--rows),auto);grid-auto-flow:column;column-gap:1.4rem}
+.lb-row{padding:.18rem .9rem;border-radius:.7rem;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.07);font-size:1rem;font-weight:700;min-height:1.7rem;will-change:transform}
+.lb-rank{font-weight:900;font-size:1.05rem;text-align:center}
+.lb-row .name{font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lb-row .opp{color:var(--muted);font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lb-row .dist,.lb-row .pts{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.lb-row .dist{font-size:.9rem}
+.lb-row .pts{font-weight:900;color:var(--cyan)}
+.lb-row .res{text-align:center;font-size:1.15rem}
+.lb-row.pending{opacity:.42;filter:grayscale(1)}
+.lb-row.gold{background:linear-gradient(90deg,rgba(251,191,36,.38),rgba(251,191,36,.07));border-color:rgba(251,191,36,.75)}
+.lb-row.silver{background:linear-gradient(90deg,rgba(214,222,235,.32),rgba(214,222,235,.05));border-color:rgba(214,222,235,.65)}
+.lb-row.bronze{background:linear-gradient(90deg,rgba(224,138,60,.34),rgba(224,138,60,.05));border-color:rgba(224,138,60,.7)}
+.lb-row.gold .pts{color:var(--gold)}.lb-row.silver .pts{color:var(--silver)}.lb-row.bronze .pts{color:#f6ad55}
+.lb-row.just{box-shadow:0 0 0 2px var(--cyan),0 0 1.2rem rgba(34,211,238,.4)}
+.tag{display:inline-block;font-size:.6rem;font-weight:800;padding:.15rem .5rem;border-radius:99px;background:rgba(255,255,255,.14);letter-spacing:.08em;vertical-align:middle;text-transform:uppercase}
+.overlay{position:fixed;inset:0;z-index:60;display:none;background:rgba(4,5,20,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:1.4rem 2.2rem 1rem}
+.overlay.show{display:flex;flex-direction:column;animation:fadeIn .25s}
+
+/* =============================== FİNAL =============================== */
+#scr-final{justify-content:flex-start;padding-top:1.6rem}
+.podium{display:flex;align-items:flex-end;justify-content:center;gap:1.4rem;flex:1;width:100%;min-height:0;margin-top:.6rem}
+.pod{width:21rem;display:flex;flex-direction:column;align-items:center;opacity:0;transform:translateY(4rem)}
+.pod.show{opacity:1;transform:none;transition:opacity .6s,transform .9s cubic-bezier(.2,1.3,.3,1)}
+.pod-medal{font-size:4rem;line-height:1}
+.pod-name{font-size:2.2rem;font-weight:900;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pod-pts{font-size:1.1rem;color:#dfe3ff;font-weight:800}
+.pod-block{width:100%;border-radius:1.1rem 1.1rem 0 0;display:flex;align-items:flex-start;justify-content:center;font-size:5rem;font-weight:900;padding-top:.8rem;margin-top:.7rem;color:rgba(0,0,0,.35)}
+.pod.first .pod-block{height:40vh;background:linear-gradient(180deg,#fde047,#b45309);box-shadow:0 0 4rem rgba(251,191,36,.6)}
+.pod.second .pod-block{height:29vh;background:linear-gradient(180deg,#f1f5f9,#64748b)}
+.pod.third .pod-block{height:21vh;background:linear-gradient(180deg,#fbbf77,#7c2d12)}
+.pod.first .pod-name{font-size:2.8rem;color:var(--gold)}
+.final-actions{margin-top:1rem;opacity:0;transition:opacity .5s;pointer-events:none}
+.final-actions.show{opacity:1;pointer-events:auto}
+
+/* =============================== ÖDÜLLER =============================== */
+#scr-awards{justify-content:flex-start;padding-top:2rem}
+.awards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1.1rem;width:100%;perspective:1400px;margin:1.6rem 0;flex:1;max-height:30rem}
+.award{position:relative;transform-style:preserve-3d;transition:transform 1s cubic-bezier(.2,.8,.2,1);transform:rotateY(180deg)}
+.award.flip{transform:none}
+.award .face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:1.2rem;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.1rem;text-align:center}
+.award .back{transform:rotateY(180deg);background:linear-gradient(135deg,#312e81,#7c3aed);font-size:5rem;border:1px solid var(--line)}
+.aw-emoji{font-size:4.5rem;line-height:1}
+.aw-title{font-size:1.3rem;font-weight:900;color:var(--yellow);margin-top:.6rem}
+.aw-sub{font-size:.8rem;color:var(--muted);font-weight:700}
+.aw-name{font-size:1.75rem;font-weight:900;margin:.8rem 0 .4rem;word-break:break-word;line-height:1.1}
+.aw-detail{font-size:.95rem;color:#dfe3ff}
+
+/* =============================== ADMIN =============================== */
+#ov-admin{z-index:70;padding:1.2rem}
+.admin-panel{width:100%;height:100%;display:flex;flex-direction:column;background:rgba(12,14,42,.97);border:1px solid var(--line);border-radius:1.2rem;overflow:hidden;font-size:.8rem;text-align:left}
+.admin-head{display:flex;align-items:center;gap:1rem;padding:.7rem 1.1rem;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.admin-head h2{margin:0;font-size:1.3rem}
+.admin-tabs{display:flex;gap:.3rem;flex-wrap:wrap;flex:1}
+.admin-tabs button{padding:.45rem .9rem;border-radius:.6rem;border:1px solid var(--line);background:transparent;cursor:pointer;font-weight:800}
+.admin-tabs button.on{background:var(--purple);color:#140b2e;border-color:var(--purple)}
+.admin-body{flex:1;overflow:auto;padding:1rem 1.2rem}
+.admin-body h3{margin:.2rem 0 .7rem;font-size:1.05rem}
+.adm-table{width:100%;border-collapse:collapse}
+.adm-table th{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);position:sticky;top:-1rem;background:#0f1236;z-index:1}
+.adm-table th,.adm-table td{padding:.35rem .5rem;border-bottom:1px solid rgba(255,255,255,.07);text-align:left;vertical-align:middle}
+.adm-table tr.dragging{opacity:.35}
+.adm-table tr.dropline td{box-shadow:inset 0 3px 0 var(--cyan)}
+.adm-table td.drag{cursor:grab;color:var(--muted);font-size:1rem;user-select:none}
+.adm-table .acts{white-space:nowrap}
+.adm-table .acts button,.ibtn{background:rgba(255,255,255,.08);border:1px solid var(--line);border-radius:.45rem;padding:.25rem .45rem;cursor:pointer;margin-right:.2rem}
+.adm-table .acts button:hover,.ibtn:hover{background:rgba(255,255,255,.18)}
+.inp,.admin-panel input[type=text],.admin-panel input[type=number],.admin-panel input[type=password],.admin-panel select,.modal input[type=text],.modal input[type=number],.modal select,.modal textarea{background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:.5rem;padding:.4rem .6rem;color:var(--txt);outline:none;min-width:0}
+.admin-panel input:focus,.admin-panel select:focus,.modal input:focus,.modal select:focus{border-color:var(--cyan)}
+select option{background:#151840;color:#fff}
+.privacy .sensitive{filter:blur(.42rem);transition:filter .2s}
+.privacy tr:hover .sensitive{filter:none}
+.adm-add{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:1rem;padding:1rem;margin-bottom:1rem}
+.adm-add .fields{display:flex;flex-direction:column;gap:.55rem}
+.adm-add .fields .row input{flex:1}
+.adm-minimap{height:15rem;border-radius:.8rem;overflow:hidden;border:1px solid var(--line)}
+.adm-toolbar{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-bottom:.7rem}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));gap:.9rem}
+.form-grid label{display:flex;flex-direction:column;gap:.25rem;font-weight:800}
+.form-grid label.chk{flex-direction:row;align-items:center;gap:.6rem}
+.form-grid small{color:var(--muted);font-weight:500}
+.switch{position:relative;display:inline-block;width:2.6rem;height:1.4rem;vertical-align:middle}
+.switch input{opacity:0;width:0;height:0}
+.switch span{position:absolute;inset:0;border-radius:99px;background:rgba(255,255,255,.18);transition:.2s;cursor:pointer}
+.switch span::before{content:'';position:absolute;width:1rem;height:1rem;left:.2rem;top:.2rem;border-radius:50%;background:#fff;transition:.2s}
+.switch input:checked+span{background:var(--lime)}
+.switch input:checked+span::before{transform:translateX(1.2rem)}
+.cov{font-size:1rem}
+.pill{display:inline-block;padding:.1rem .5rem;border-radius:99px;font-size:.68rem;font-weight:800;background:rgba(255,255,255,.12)}
+.pill.ok{background:rgba(163,230,53,.2);color:#d9f99d}.pill.live{background:rgba(34,211,238,.2);color:#a5f3fc}.pill.wait{background:rgba(255,255,255,.1);color:var(--muted)}
+.sect{padding:1rem 1.1rem;margin-bottom:1rem}
+.player-edit{display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:.5rem}
+
+/* =============================== MODAL / TOAST / YARDIM =============================== */
+#modal-root{position:fixed;inset:0;z-index:90;pointer-events:none}
+.modal-wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(3,4,16,.72);backdrop-filter:blur(6px);pointer-events:auto;animation:fadeIn .2s}
+.modal{width:min(42rem,92vw);max-height:90vh;overflow:auto;background:#141640;border:1px solid var(--line);border-radius:1.2rem;padding:1.4rem 1.6rem;box-shadow:0 2rem 5rem rgba(0,0,0,.6);text-align:left;animation:popIn .3s cubic-bezier(.2,1.3,.3,1)}
+.modal.wide{width:min(76rem,95vw)}
+.modal h3{margin:0 0 .8rem;font-size:1.4rem}
+.modal-body{font-size:1rem}
+.modal-actions{display:flex;justify-content:flex-end;gap:.6rem;margin-top:1.2rem;flex-wrap:wrap}
+.modal .form-grid{font-size:.8rem}
+.prev-sv{height:62vh;border-radius:.8rem;overflow:hidden;background:#000}
+#toast-root{position:fixed;left:50%;bottom:2rem;transform:translateX(-50%);z-index:95;display:flex;flex-direction:column;gap:.5rem;align-items:center;pointer-events:none}
+.toast{padding:.65rem 1.4rem;border-radius:999px;background:rgba(15,18,50,.94);border:1px solid var(--line);font-weight:800;box-shadow:0 .8rem 2rem rgba(0,0,0,.45);animation:popIn .3s both;max-width:80vw;text-align:center}
+.toast.warn{border-color:var(--yellow);color:var(--yellow)}
+.toast.err{border-color:var(--red);color:#ffb3c0}
+.toast.ok{border-color:var(--lime);color:#d9f99d}
+.toast.out{opacity:0;transform:translateY(.6rem);transition:.35s}
+#help{position:fixed;left:1rem;bottom:1rem;z-index:55;padding:1rem 1.2rem;display:none;font-size:.8rem;text-align:left}
+#help.show{display:block;animation:popIn .25s}
+#help h4{margin:0 0 .5rem;font-size:.9rem;letter-spacing:.15em;color:var(--cyan)}
+#help td{padding:.16rem .5rem .16rem 0}
+
+/* Küçük ekran güvenlik ağı */
+@media (max-width:900px){
+  #scr-setup{flex-direction:column;overflow:auto}
+  .reveal-grid{grid-template-columns:1fr;grid-template-rows:55% 45%}
+  .reveal-side{border-left:0;border-top:1px solid var(--line)}
+  .awards{grid-template-columns:repeat(2,1fr);max-height:none;overflow:auto}
+  .vs-grid{grid-template-columns:1fr!important}
+  .lb-grid.two{grid-template-columns:1fr;grid-auto-flow:row;grid-template-rows:none}
+  .lb-heads{--cols:1!important}
+  .lb-heads .lb-hrow:nth-child(2){display:none}
+  .adm-add{grid-template-columns:1fr}
+  .draw-head,#scr-leader .lb-top{padding-right:0;padding-top:2.6rem;flex-wrap:wrap}
+}
+</style>
+</head>
+<body>
+<div id="bg"></div>
+
+<div id="topbar">
+  <button id="tb-help" title="Kısayollar (H)">❓</button>
+  <button id="tb-lb" title="Lider tablosu (L)">🏆</button>
+  <button id="tb-mute" title="Ses (M)">🔊</button>
+  <button id="tb-fs" title="Tam ekran (F)">⛶</button>
+  <button id="tb-admin" title="Yönetim paneli (Ctrl+Shift+A)">⚙️</button>
+</div>
+
+<!-- Açılış / kurulum / hata -->
+<section id="scr-boot" class="screen active"><div class="spinner"></div><div class="eyebrow">GeoDüello yükleniyor…</div></section>
+
+<!-- Splash -->
+<section id="scr-splash" class="screen">
+  <canvas id="globe"></canvas>
+  <div class="splash-content">
+    <div class="logo"><span class="geo">GEO</span><span class="duel">DÜELLO</span></div>
+    <p class="tagline">Bak. Keşfet. Tahmin et. Rakibini haritadan sil. 🌍⚔️</p>
+    <div class="row" style="justify-content:center">
+      <button class="btn xl" id="btn-setup">🚀 Oyunu Kur</button>
+      <button class="btn lg ghost" id="btn-resume" hidden>⏯ Kaldığın Yerden Devam</button>
+    </div>
+    <div class="splash-foot"><kbd>H</kbd> kısayollar &nbsp;•&nbsp; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> yönetim paneli &nbsp;•&nbsp; <kbd>F</kbd> tam ekran</div>
+  </div>
+</section>
+
+<!-- Oyuncu kaydı -->
+<section id="scr-setup" class="screen">
+  <div class="setup-left">
+    <div class="eyebrow">Adım 1 / 2</div>
+    <h1 class="title-m">👥 Oyuncu Kaydı</h1>
+    <div class="muted">Her satıra bir isim yaz. Kopyala–yapıştır da olur.</div>
+    <textarea id="players-ta" spellcheck="false" placeholder="Ayşe&#10;Mehmet&#10;Zeynep&#10;Can&#10;…"></textarea>
+  </div>
+  <div class="setup-right">
+    <div class="setup-stat glass">
+      <div class="stat-row">
+        <div><div class="stat-big" id="st-count">0</div><div class="muted">kayıtlı oyuncu</div></div>
+        <div><div class="stat-big" id="st-rounds" style="color:var(--pink)">0</div><div class="muted">round (eşleşme)</div></div>
+      </div>
+      <div id="st-detail" class="muted" style="margin-top:.6rem"></div>
+    </div>
+    <div id="st-warn"></div>
+    <div id="odd-box" class="glass" style="padding:1rem 1.2rem" hidden>
+      <b>Tek sayıda oyuncu var — nasıl oynansın?</b>
+      <label class="radio-card" data-mode="trio"><input type="radio" name="oddmode" value="trio"><span><b>🔺 Son round 3 kişilik</b>Herkes oynar; son round üçlü düello olur.</span></label>
+      <label class="radio-card" data-mode="bye"><input type="radio" name="oddmode" value="bye"><span><b>🛋️ 1 kişi bay geçer</b>Kurada rastgele bir kişi bu oyunda oynamaz.</span></label>
+    </div>
+    <div style="flex:1"></div>
+    <div class="row" style="justify-content:space-between">
+      <button class="btn ghost" id="btn-setup-back">← Ana ekran</button>
+      <button class="btn lg" id="btn-to-draw" disabled>🎲 Kuraya Geç</button>
+    </div>
+  </div>
+</section>
+
+<!-- Kura -->
+<section id="scr-draw" class="screen">
+  <div class="draw-head">
+    <div style="text-align:left"><div class="eyebrow">Adım 2 / 2</div><h1 class="title-m">🎲 Kura Çekimi</h1><div class="muted" id="draw-sub"></div></div>
+    <div class="row">
+      <button class="btn ghost" id="btn-draw-back">← Kayıt</button>
+      <button class="btn ghost" id="btn-reshuffle">🔀 Yeniden Karıştır</button>
+      <button class="btn lg" id="btn-start-game">▶ Oyunu Başlat</button>
+    </div>
+  </div>
+  <div class="draw-stage" id="draw-stage"></div>
+</section>
+
+<!-- Round intro (VS) -->
+<section id="scr-intro" class="screen"></section>
+
+<!-- Hazır mı -->
+<section id="scr-ready" class="screen"></section>
+
+<!-- Oyun -->
+<section id="scr-play" class="screen">
+  <div id="sv"></div>
+  <div id="sv-cover"></div>
+  <div class="hud hud-left glass">
+    <div class="hud-round" id="hud-round"></div>
+    <div class="hud-player"><span class="dot"></span><span id="hud-name"></span></div>
+    <div class="move-label"><span>🚶 Hareket alanı</span><b id="move-txt">0 / 125 m</b></div>
+    <div class="move-bar"><i id="move-fill"></i></div>
+    <div class="embed-note">🚶 Serbest dolaşım (key'siz mod)</div>
+    <button class="btn sm ghost" id="btn-home" title="Başlangıç noktasına dön">🏁 Başlangıca dön</button>
+  </div>
+  <div class="hud hud-timer" id="hud-timer">
+    <svg viewBox="0 0 120 120"><circle class="trk" cx="60" cy="60" r="52"/><circle class="prg" id="timer-prg" cx="60" cy="60" r="52"/></svg>
+    <div class="timer-num" id="timer-num">20</div>
+    <div class="timer-lbl" id="timer-lbl">KEŞİF</div>
+  </div>
+  <div id="gm-wrap" class="gm-wrap mini">
+    <div id="guess-map"></div>
+    <button class="gm-collapse" id="gm-collapse">✕ Küçült</button>
+    <div class="gm-hint" id="gm-hint">Haritaya tıklayıp pin koy</div>
+    <button class="btn guess" id="btn-guess" disabled>📍 TAHMİN ET</button>
+  </div>
+</section>
+
+<!-- Devir teslim -->
+<section id="scr-handoff" class="screen"></section>
+
+<!-- Sonuç -->
+<section id="scr-reveal" class="screen">
+  <div class="reveal-grid">
+    <div class="reveal-map-wrap"><div id="reveal-map"></div><div id="win-banner" class="win-banner"></div></div>
+    <aside class="reveal-side">
+      <div class="reveal-title" id="reveal-title"></div>
+      <div id="loc-card" class="loc-card glass"></div>
+      <div id="reveal-players" style="display:flex;flex-direction:column;gap:.7rem"></div>
+      <div class="reveal-actions" id="reveal-actions">
+        <button class="btn ghost lg" id="btn-rv-lb">🏆 Lider Tablosu</button>
+        <button class="btn lg" id="btn-rv-next">▶ Sonraki Round</button>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- Lider tablosu sayfası -->
+<section id="scr-leader" class="screen">
+  <div class="lb-top">
+    <div style="text-align:left"><h1 class="title-m">🏆 Lider Tablosu</h1><div class="muted" id="lb-sub"></div></div>
+    <button class="btn lg" id="btn-lb-next">▶ Sonraki Round</button>
+  </div>
+  <div class="lb" id="lb-page"></div>
+</section>
+
+<!-- Final podyum -->
+<section id="scr-final" class="screen"></section>
+
+<!-- Ödüller -->
+<section id="scr-awards" class="screen"></section>
+
+<!-- Lider tablosu overlay -->
+<div id="ov-leader" class="overlay">
+  <div class="lb-top">
+    <div style="text-align:left"><h1 class="title-m">🏆 Lider Tablosu</h1><div class="muted" id="lbo-sub"></div></div>
+    <button class="btn ghost" id="btn-lbo-close">✕ Kapat <kbd>Esc</kbd></button>
+  </div>
+  <div class="lb" id="lb-overlay"></div>
+</div>
+
+<!-- Admin -->
+<div id="ov-admin" class="overlay"></div>
+
+<!-- Duraklatma -->
+<div id="pause">⏸ DURAKLATILDI<small><kbd>P</kbd> ile devam et</small></div>
+
+<!-- Yardım -->
+<div id="help" class="glass">
+  <h4>KISAYOLLAR</h4>
+  <table>
+    <tr><td><kbd>Space</kbd></td><td>Başlat / sonraki adım</td></tr>
+    <tr><td><kbd>P</kbd></td><td>Zamanlayıcıyı duraklat / devam</td></tr>
+    <tr><td><kbd>T</kbd></td><td>Süreye +10 sn ekle</td></tr>
+    <tr><td><kbd>L</kbd></td><td>Lider tablosu</td></tr>
+    <tr><td><kbd>F</kbd></td><td>Tam ekran</td></tr>
+    <tr><td><kbd>M</kbd></td><td>Sessiz</td></tr>
+    <tr><td><kbd>R</kbd></td><td>Oyuncunun turunu yeniden başlat</td></tr>
+    <tr><td><kbd>H</kbd></td><td>Bu panel</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Overlay'i kapat</td></tr>
+    <tr><td><kbd>Ctrl+Shift+A</kbd></td><td>Yönetim paneli</td></tr>
+  </table>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+'use strict';
+/* =====================================================================
+   CONFIG — düzenlenebilir ayarlar
+   (Yönetim panelinden değiştirilen ayarlar tarayıcıda saklanır. Bu dosyada
+   bir değeri değiştirirsen, dosyadaki yeni değer kayıtlı olanın önüne geçer.)
+   ===================================================================== */
+const CONFIG = {
+  GOOGLE_MAPS_API_KEY: '',      // ← Google Maps JavaScript API anahtarın
+  CARTO_API_KEY: '',            // ← (Opsiyonel) CARTO Voyager harita karoları için ücretsiz key: https://carto.com/basemaps/apikey
+                                //   Boşsa tahmin/sonuç haritası Esri karolarını kullanır (key gerekmez).
+  exploreSeconds: 20,           // Street View'de keşif süresi
+  guessSeconds: 0,              // Keşiften sonra pin koymak için ek süre (0 = sınırsız)
+  moveRadiusMeters: 125,        // Başlangıç noktasından en fazla uzaklaşma (0 = hareket yok)
+  panoSearchRadius: 50,         // getPanorama arama yarıçapı (m)
+  fallbackSearchRadius: 1000,   // 50 m'de panorama yoksa ikinci deneme yarıçapı (0 = kapalı)
+  scoreMax: 5000,               // Maksimum mesafe puanı
+  scoreScaleKm: 2000,           // Puan = scoreMax * exp(-mesafe / scoreScaleKm)
+  perfectMeters: 50,            // Bu mesafenin altı tam puan
+  winBonus: 1000,               // Düelloyu kazanana bonus
+  tieMeters: 1,                 // Beraberlik toleransı (m)
+  lastSecondWindow: 2,          // "Son Saniyeci" ödülü penceresi (sn)
+  soundEnabled: true,           // Ses efektleri
+  finalDuel: false,             // En yüksek puanlı 2 oyuncu için Final Düellosu
+  oddMode: 'trio',              // Tek sayı: 'trio' (son round 3 kişilik) | 'bye' (1 kişi bay)
+  assignMode: 'random',         // Konum atama: 'random' (az oynananlar önce) | 'sequential' | 'manual'
+  mapsLoadTimeoutMs: 15000,     // Google Maps yükleme zaman aşımı
+};
+
+/* =====================================================================
+   YARDIMCILAR
+   ===================================================================== */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const trLower = s => String(s).toLocaleLowerCase('tr-TR');
+const initial = name => (String(name || '?').trim()[0] || '?').toLocaleUpperCase('tr-TR');
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function haversineKm(a, b) {
+  const R = 6371.0088, r = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+const nf0 = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 });
+const nf1 = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+function fmtDist(km) {
+  if (km == null || !isFinite(km)) return '—';
+  if (km < 1) return nf0.format(Math.round(km * 1000)) + ' m';
+  if (km < 100) return nf1.format(km) + ' km';
+  return nf0.format(Math.round(km)) + ' km';
+}
+const fmtPts = n => nf0.format(Math.round(n || 0));
+const fmtSec = ms => nf1.format((ms || 0) / 1000) + ' sn';
+function flagEmoji(cc) {
+  if (!cc || !/^[a-z]{2}$/i.test(cc)) return '🌍';
+  return String.fromCodePoint(...cc.toUpperCase().split('').map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+}
+// Windows bayrak emojilerini harf olarak gösterir; bu yüzden bayrak görseli (flagcdn) + emoji yedeği
+function flagHTML(cc, h = '1.1em') {
+  if (!cc || !/^[a-z]{2}$/i.test(cc)) return '🌍';
+  const c = cc.toLowerCase();
+  return `<img class="flag-img" src="https://flagcdn.com/w160/${c}.png" alt="${flagEmoji(c)}" style="height:${h}" onerror="this.replaceWith(document.createTextNode(this.alt))">`;
+}
+function animateValue(el, to, { from = 0, dur = 1200, fmt = fmtPts } = {}) {
+  return new Promise(res => {
+    const t0 = performance.now();
+    const step = now => {
+      const t = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - t, 3);
+      el.textContent = fmt(from + (to - from) * e);
+      if (t < 1) requestAnimationFrame(step); else res();
+    };
+    requestAnimationFrame(step);
+  });
+}
+function tween(dur, fn) {
+  return new Promise(res => {
+    const t0 = performance.now();
+    const step = now => { const t = Math.min(1, (now - t0) / dur); fn(1 - Math.pow(1 - t, 3)); if (t < 1) requestAnimationFrame(step); else res(); };
+    requestAnimationFrame(step);
+  });
+}
+function confettiBurst(opts = {}) { if (typeof window.confetti === 'function') { try { window.confetti(Object.assign({ particleCount: 120, spread: 80, origin: { y: .6 }, zIndex: 2000 }, opts)); } catch (e) { /* yoksay */ } } }
+function bigConfetti(ms = 2600) {
+  if (typeof window.confetti !== 'function') return;
+  const end = Date.now() + ms;
+  const colors = ['#22d3ee', '#f472b6', '#fde047', '#a78bfa', '#a3e635'];
+  (function frame() {
+    confettiBurst({ particleCount: 7, angle: 60, spread: 60, origin: { x: 0, y: .7 }, colors });
+    confettiBurst({ particleCount: 7, angle: 120, spread: 60, origin: { x: 1, y: .7 }, colors });
+    if (Date.now() < end) requestAnimationFrame(frame);
+  })();
+}
+
+/* =====================================================================
+   AUDIO — Web Audio API ile sentezlenen sesler (harici dosya yok)
+   ===================================================================== */
+const Sound = {
+  ctx: null, master: null,
+  get on() { return !!settings.soundEnabled; },
+  ensure() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      this.ctx = new AC();
+      this.master = this.ctx.createGain(); this.master.gain.value = .9; this.master.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    return this.ctx;
+  },
+  tone(freq, { type = 'sine', dur = .2, vol = .2, attack = .005, delay = 0, slide = null } = {}) {
+    if (!this.on) return; const c = this.ensure(); if (!c) return;
+    const t = c.currentTime + delay, o = c.createOscillator(), g = c.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + .05);
+  },
+  noise({ dur = .3, vol = .15, delay = 0, freq = 1200, q = 1, type = 'bandpass', sweep = null } = {}) {
+    if (!this.on) return; const c = this.ensure(); if (!c) return;
+    const len = Math.floor(c.sampleRate * dur), buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = c.createBufferSource(); src.buffer = buf;
+    const f = c.createBiquadFilter(); f.type = type; f.Q.value = q;
+    const t = c.currentTime + delay; f.frequency.setValueAtTime(freq, t);
+    if (sweep) f.frequency.exponentialRampToValueAtTime(sweep, t + dur);
+    const g = c.createGain(); g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + dur * .3); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.master); src.start(t); src.stop(t + dur + .05);
+  },
+  tick() { this.tone(1500, { type: 'square', dur: .06, vol: .1 }); this.tone(750, { dur: .12, vol: .12 }); },
+  click() { this.tone(500 + Math.random() * 900, { type: 'triangle', dur: .04, vol: .07 }); },
+  ding() { this.tone(1320, { dur: .6, vol: .14 }); this.tone(1980, { dur: .4, vol: .05, delay: .01 }); },
+  pop() { this.tone(480, { dur: .13, vol: .18, slide: 980 }); },
+  whoosh() { this.noise({ dur: .7, vol: .22, freq: 300, sweep: 3200, q: .8 }); },
+  gong() {
+    [[98, 3, .3], [196, 2.4, .15], [293, 1.8, .08], [419, 1.3, .05], [588, 1, .03]].forEach(([f, d, v]) => this.tone(f, { dur: d, vol: v, attack: .008 }));
+    this.noise({ dur: .3, vol: .1, freq: 2500 });
+  },
+  victory() {
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.tone(f, { type: 'triangle', dur: .24, vol: .17, delay: i * .12 }));
+    [523.25, 659.25, 783.99].forEach(f => this.tone(f, { type: 'sawtooth', dur: 1.4, vol: .035, delay: .52, attack: .03 }));
+    this.tone(1046.5, { type: 'triangle', dur: 1.4, vol: .16, delay: .52 });
+    this.tone(1318.5, { type: 'triangle', dur: 1.2, vol: .08, delay: .52 });
+  },
+  start() { this.tone(440, { type: 'triangle', dur: .15, vol: .15 }); this.tone(880, { type: 'triangle', dur: .35, vol: .15, delay: .12 }); },
+  error() { this.tone(190, { type: 'sawtooth', dur: .25, vol: .1, slide: 120 }); },
+  toggle() { settings.soundEnabled = !settings.soundEnabled; save(); UI.updateTopbar(); UI.toast(settings.soundEnabled ? '🔊 Ses açık' : '🔇 Ses kapalı'); },
+};
+
+/* =====================================================================
+   STORAGE — localStorage kalıcılığı
+   ===================================================================== */
+const LS = { SETTINGS: 'geoduello.settings.v1', LOCATIONS: 'geoduello.locations.v1', GAME: 'geoduello.game.v1' };
+const Storage = {
+  read(k, fb) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch (e) { return fb; } },
+  write(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { console.warn('localStorage yazılamadı', e); } },
+  remove(k) { try { localStorage.removeItem(k); } catch (e) { /* yoksay */ } },
+};
+const SETTING_KEYS = ['exploreSeconds', 'guessSeconds', 'moveRadiusMeters', 'panoSearchRadius', 'fallbackSearchRadius', 'scoreMax', 'scoreScaleKm', 'perfectMeters', 'winBonus', 'tieMeters', 'lastSecondWindow', 'soundEnabled', 'finalDuel', 'oddMode', 'assignMode', 'mapsLoadTimeoutMs'];
+function cfgSnapshot() { const o = {}; SETTING_KEYS.forEach(k => o[k] = CONFIG[k]); return o; }
+function loadSettings() {
+  const s = { apiKey: '', cartoKey: '', finalLocationId: '' };
+  SETTING_KEYS.forEach(k => s[k] = CONFIG[k]);
+  const stored = Storage.read(LS.SETTINGS, null);
+  if (stored) {
+    const snap = stored._cfg || {};
+    Object.keys(stored).forEach(k => {
+      if (k === '_cfg') return;
+      // Dosyadaki CONFIG değeri değiştirildiyse dosya kazanır
+      if (SETTING_KEYS.includes(k) && k in snap && snap[k] !== CONFIG[k]) return;
+      s[k] = stored[k];
+    });
+  }
+  return s;
+}
+const apiKey = () => String(settings.apiKey || CONFIG.GOOGLE_MAPS_API_KEY || '').trim();
+
+/* =====================================================================
+   HAZIR KONUMLAR — 30 adet, Türkiye hariç, 6 kıtaya dağılmış.
+   Hepsi resmi Google Street View araç görüntüsü (dış mekân, sokak) — pano ID'leri Ekim 2026'da doğrulandı.
+   panoId sayesinde key'siz (embed) modda da çalışır.
+   ===================================================================== */
+const SEED_LOCATIONS = [
+  { id: 'w-01', label: 'Vatnsstígur', city: 'Reykjavik', country: 'İzlanda', countryCode: 'is', difficulty: 'Orta', lat: 64.14552, lng: -21.92704, heading: 29, pitch: 0, panoId: 'ZB70TJ5vGQTlLlBe3e77-g', imageDate: '2013-07', desc: 'İzlanda başkentinin renkli, alçak katlı merkez sokakları.' },
+  { id: 'w-02', label: 'Bankgata', city: 'Tromsø', country: 'Norveç', countryCode: 'no', difficulty: 'Orta', lat: 69.649085, lng: 18.956066, heading: 101, pitch: 0, panoId: 'Y3cQ_ZdLybWb7GlkopmkCw', imageDate: '2014-06', desc: 'Kutup Dairesi\'nin 350 km kuzeyinde, "Kuzeyin Paris\'i" denen liman şehri.' },
+  { id: 'w-03', label: 'Royal Mile (High Street)', city: 'Edinburgh', country: 'Birleşik Krallık (İskoçya)', countryCode: 'gb', difficulty: 'Kolay', lat: 55.949852, lng: -3.189951, heading: 78, pitch: 0, panoId: '6AMa-Nd-owSAoBl55PyPxg', imageDate: '2023-06', desc: 'Edinburgh Kalesi ile Holyrood Sarayı\'nı bağlayan taş döşeli tarihi cadde.' },
+  { id: 'w-04', label: 'Ribeira Meydanı', city: 'Porto', country: 'Portekiz', countryCode: 'pt', difficulty: 'Orta', lat: 41.140397, lng: -8.61301, heading: 261, pitch: 0, panoId: 'hz2hkd0VEgV2rUlP3M1mjQ', imageDate: '2020-07', desc: 'Douro Nehri kıyısında, UNESCO listesindeki renkli rıhtım mahallesi.' },
+  { id: 'w-05', label: 'Grodzka Sokağı', city: 'Krakow', country: 'Polonya', countryCode: 'pl', difficulty: 'Orta', lat: 50.060018, lng: 19.937706, heading: 175, pitch: 0, panoId: 'UaE1hmMV7R41w3o6myhxMQ', imageDate: '2025-07', desc: 'Ana Meydan\'dan Wawel Kalesi\'ne uzanan ortaçağ kraliyet yolu.' },
+  { id: 'w-06', label: 'Mitropoleos Caddesi', city: 'Atina', country: 'Yunanistan', countryCode: 'gr', difficulty: 'Orta', lat: 37.975931, lng: 23.728024, heading: 110, pitch: 0, panoId: 'yC8pJ1dxCVvkcPY3AADxnQ', imageDate: '2022-09', desc: 'Sintagma Meydanı ile Plaka arasında, Akropolis\'in eteklerinde.' },
+  { id: 'w-07', label: 'Nólsoyar Páls gøta', city: 'Tórshavn', country: 'Faroe Adaları (Danimarka)', countryCode: 'fo', difficulty: 'Zor', lat: 62.010972, lng: -6.771183, heading: 308, pitch: 0, panoId: 'e1EDrXjntuQ_8wIznezrLw', imageDate: '2024-06', desc: 'Kuzey Atlantik\'in ortasında, dünyanın en küçük başkentlerinden biri.' },
+  { id: 'w-08', label: 'Paseo de la Reforma — Bağımsızlık Anıtı', city: 'Meksiko', country: 'Meksika', countryCode: 'mx', difficulty: 'Kolay', lat: 19.427037, lng: -99.168069, heading: 177, pitch: 0, panoId: 'in9Ed6F62TAPBq338w6d4A', imageDate: '2024-09', desc: 'Altın kanatlı "El Ángel" anıtının bulunduğu dev bulvar.' },
+  { id: 'w-09', label: 'Eski Quebec', city: 'Quebec City', country: 'Kanada', countryCode: 'ca', difficulty: 'Orta', lat: 46.813059, lng: -71.206993, heading: 95, pitch: 0, panoId: 'ORNei-szp_o2al9aBgzs2Q', imageDate: '2025-06', desc: 'Kuzey Amerika\'nın surlarla çevrili tek şehri; Fransızca konuşulan tarihi merkez.' },
+  { id: 'w-10', label: 'St. Peter Street — French Quarter', city: 'New Orleans', country: 'Amerika Birleşik Devletleri', countryCode: 'us', difficulty: 'Orta', lat: 29.958115, lng: -90.064956, heading: 307, pitch: 0, panoId: 'Cjg9bWjt-IBkCTl3s1yCaw', imageDate: '2022-03', desc: 'Demir balkonlu evleri ve caz kulüpleriyle ünlü Fransız Mahallesi.' },
+  { id: 'w-11', label: 'Banff Avenue', city: 'Banff', country: 'Kanada', countryCode: 'ca', difficulty: 'Orta', lat: 51.17722, lng: -115.57077, heading: 183, pitch: 0, panoId: 'TKituHKWQz1UadEwMlr2OQ', imageDate: '2026-08', desc: 'Kayalık Dağlar\'ın ortasındaki milli park kasabasının ana caddesi.' },
+  { id: 'w-12', label: 'Avenida Camacho', city: 'La Paz', country: 'Bolivya', countryCode: 'bo', difficulty: 'Orta', lat: -16.498999, lng: -68.133987, heading: 116, pitch: 0, panoId: 'CjsQEuKYh8yOGpeCSTi9SA', imageDate: '2015-03', desc: 'Deniz seviyesinden ~3.600 m yüksekte, dünyanın en yüksek idari başkenti.' },
+  { id: 'w-13', label: 'Abtao Sokağı — Cerro Concepción', city: 'Valparaíso', country: 'Şili', countryCode: 'cl', difficulty: 'Orta', lat: -33.042002, lng: -71.627005, heading: 144, pitch: 0, panoId: 'ZeC-1TarO-A1APEZz49MdQ', imageDate: '2026-03', desc: 'Duvar resimleri ve renkli evleriyle tepelere tırmanan liman şehri.' },
+  { id: 'w-14', label: 'Avenida Maipú', city: 'Ushuaia', country: 'Arjantin', countryCode: 'ar', difficulty: 'Orta', lat: -54.807151, lng: -68.303918, heading: 66, pitch: 0, panoId: 'ej2rOalkoB0eW54tkCvNUA', imageDate: '2014-03', desc: '"Dünyanın sonundaki şehir": Ateş Toprakları\'nda, Beagle Kanalı kıyısı.' },
+  { id: 'w-15', label: 'Bo-Kaap — Helliger Lane', city: 'Cape Town', country: 'Güney Afrika', countryCode: 'za', difficulty: 'Orta', lat: -33.920692, lng: 18.415074, heading: 132, pitch: 0, panoId: '-ghpmSCJ_iJH4Kn2Jhq3ZQ', imageDate: '2024-09', desc: 'Rengârenk evleriyle Masa Dağı eteğindeki tarihi Malay mahallesi.' },
+  { id: 'w-16', label: 'Kenyatta Avenue', city: 'Nairobi', country: 'Kenya', countryCode: 'ke', difficulty: 'Orta', lat: -1.284359, lng: 36.821482, heading: 251, pitch: 0, panoId: 'DSHtrx51O_vQaZHnu6MWRw', imageDate: '2023-02', desc: 'Doğu Afrika\'nın iş ve diplomasi merkezinin ana bulvarı.' },
+  { id: 'w-17', label: 'Oxford Street — Osu', city: 'Akra', country: 'Gana', countryCode: 'gh', difficulty: 'Zor', lat: 5.555922, lng: -0.182937, heading: 22, pitch: 0, panoId: 'UNB1TLddhfGpTwKHeHMO9w', imageDate: '2024-08', desc: 'Gana başkentinin en hareketli alışveriş ve gece hayatı caddesi.' },
+  { id: 'w-18', label: 'Plateau', city: 'Dakar', country: 'Senegal', countryCode: 'sn', difficulty: 'Zor', lat: 14.669389, lng: -17.431622, heading: 357, pitch: 0, panoId: 'QJXkTNJhZdPgMgBUG9xJrw', imageDate: '2023-04', desc: 'Afrika anakarasının en batı ucundaki başkentin merkezi.' },
+  { id: 'w-19', label: 'Palace Road', city: 'Maseru', country: 'Lesotho', countryCode: 'ls', difficulty: 'Zor', lat: -29.314659, lng: 27.482368, heading: 16, pitch: 0, panoId: '-wRu4LYmmX4oyUH68qiJPg', imageDate: '2012-11', desc: 'Tamamen Güney Afrika ile çevrili dağ krallığının başkenti.' },
+  { id: 'w-20', label: 'Rothschild Bulvarı', city: 'Tel Aviv', country: 'İsrail', countryCode: 'il', difficulty: 'Orta', lat: 32.063897, lng: 34.774022, heading: 250, pitch: 0, panoId: '9I2Og_jQx78DQsTVkcZU_Q', imageDate: '2022-07', desc: 'Bauhaus binaları ve ortasındaki yeşil yürüyüş yoluyla ünlü bulvar.' },
+  { id: 'w-21', label: 'Galle Road', city: 'Kolombo', country: 'Sri Lanka', countryCode: 'lk', difficulty: 'Orta', lat: 6.93406, lng: 79.842748, heading: 14, pitch: 0, panoId: 'veZOvZfS9OkpkHuI897WsQ', imageDate: '2022-02', desc: 'Hint Okyanusu kıyısı boyunca uzanan şehrin ana arteri.' },
+  { id: 'w-22', label: 'Khao San Road', city: 'Bangkok', country: 'Tayland', countryCode: 'th', difficulty: 'Kolay', lat: 13.758925, lng: 100.497234, heading: 297, pitch: 0, panoId: '8QDZeDBZ3w4BBDm0QEtKzg', imageDate: '2024-01', desc: 'Sırt çantalı gezginlerin efsanevi sokağı.' },
+  { id: 'w-23', label: 'Jalan Sultan Ismail — Bukit Bintang', city: 'Kuala Lumpur', country: 'Malezya', countryCode: 'my', difficulty: 'Orta', lat: 3.147075, lng: 101.711117, heading: 164, pitch: 0, panoId: 'cxiWwNqQh-VM9DPbgTTUOg', imageDate: '2024-05', desc: 'Monoray hattının geçtiği alışveriş ve eğlence bölgesi.' },
+  { id: 'w-24', label: 'Gion — Shijō Dōri', city: 'Kyoto', country: 'Japonya', countryCode: 'jp', difficulty: 'Kolay', lat: 35.003677, lng: 135.775022, heading: 359, pitch: 0, panoId: 'bLwOis2ungGnHlLQYSQeKw', imageDate: '2025-09', desc: 'Geyşa mahallesi Gion\'un girişinde, Yasaka Tapınağı yakınları.' },
+  { id: 'w-25', label: 'Biei kasabası', city: 'Biei, Hokkaido', country: 'Japonya', countryCode: 'jp', difficulty: 'Zor', lat: 43.587814, lng: 142.467194, heading: 226, pitch: 0, panoId: 'izWnGRVgS9FN-L7wTV-MHg', imageDate: '2024-08', desc: 'Lavanta tarlaları ve dalgalı tepeleriyle ünlü Hokkaido kırsalı.' },
+  { id: 'w-26', label: 'Parsons Street', city: 'Alice Springs', country: 'Avustralya', countryCode: 'au', difficulty: 'Zor', lat: -23.697883, lng: 133.880678, heading: 107, pitch: 0, panoId: '8oQRU2LqBqZ52rHcIH_hPw', imageDate: '2019-10', desc: 'Avustralya\'nın tam ortasında, çölün kalbindeki kasaba.' },
+  { id: 'w-27', label: 'Cow Lane', city: 'Queenstown', country: 'Yeni Zelanda', countryCode: 'nz', difficulty: 'Orta', lat: -45.032099, lng: 168.660467, heading: 44, pitch: 0, panoId: 'Oi8LS99BuHmO4lCUqskrpg', imageDate: '2019-08', desc: 'Wakatipu Gölü kıyısında, macera sporlarının başkenti.' },
+  { id: 'w-28', label: 'Kievskaya Sokağı', city: 'Bişkek', country: 'Kırgızistan', countryCode: 'kg', difficulty: 'Zor', lat: 42.874392, lng: 74.612197, heading: 95, pitch: 0, panoId: '9ejZKe8rbQpzmmgqE7tgzg', imageDate: '2015-11', desc: 'Tanrı Dağları\'nın eteğinde, Sovyet dönemi bulvarlarıyla Orta Asya başkenti.' },
+  { id: 'w-29', label: 'Simón Bolívar Caddesi', city: 'Cuenca', country: 'Ekvador', countryCode: 'ec', difficulty: 'Orta', lat: -2.896909, lng: -79.004436, heading: 285, pitch: 0, panoId: 'eT1qEcBszVAvxDrejeps8Q', imageDate: '2022-08', desc: 'And Dağları\'nda, UNESCO listesindeki sömürge dönemi şehri.' },
+  { id: 'w-30', label: '1a Calle Poniente', city: 'Antigua Guatemala', country: 'Guatemala', countryCode: 'gt', difficulty: 'Orta', lat: 14.560844, lng: -90.734409, heading: 269, pitch: 0, panoId: '3J6iR622di09BnNpsGH5Bg', imageDate: '2016-07', desc: 'Volkanlarla çevrili, Arnavut kaldırımlı eski sömürge başkenti.' },
+].map(l => Object.assign({ active: true, coverage: true, playCount: 0 }, l));
+
+/* =====================================================================
+   STATE
+   ===================================================================== */
+// Faz akışı (state machine):
+// SPLASH → SETUP → DRAW → ROUND_INTRO → READY → EXPLORE → GUESS → HANDOFF → READY → … → REVEAL → (LEADERBOARD) → ROUND_INTRO … → FINAL → AWARDS
+// READY/EXPLORE/GUESS fazları game.turn ile birlikte P1_READY, P1_EXPLORE, P2_READY … anlamına gelir (bkz. phaseLabel()).
+const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e'];
+let settings = loadSettings();
+let locations = Storage.read(LS.LOCATIONS, null);
+// Eski 25'lik hazır listeden (seed-xx) yeni doğrulanmış 30'luk listeye otomatik geçiş; elle eklenen konumlar korunur
+if (Array.isArray(locations) && locations.some(l => /^seed-/.test(l.id))) {
+  const custom = locations.filter(l => !/^seed-/.test(l.id));
+  locations = SEED_LOCATIONS.map(l => ({ ...l })).concat(custom);
+}
+if (!Array.isArray(locations) || !locations.length) locations = SEED_LOCATIONS.map(l => ({ ...l }));
+function newGame() {
+  return { v: 1, phase: 'SPLASH', players: [], matches: [], matchIdx: -1, turn: 0, oddMode: settings.oddMode, byeId: null, draw: null, finalCreated: false, lbPrevOrder: null, lastDoneMatchId: null, draftText: '', createdAt: Date.now() };
+}
+let game = Object.assign(newGame(), Storage.read(LS.GAME, {}) || {});
+function save() {
+  Storage.write(LS.SETTINGS, { ...settings, _cfg: cfgSnapshot() });
+  Storage.write(LS.LOCATIONS, locations);
+  Storage.write(LS.GAME, game);
+}
+const playerById = id => game.players.find(p => p.id === id);
+const nameOf = id => (playerById(id) || {}).name || '?';
+const locById = id => locations.find(l => l.id === id);
+const regularMatches = () => game.matches.filter(m => !m.isFinal);
+const gameInProgress = () => game.players.length > 0 && !['SPLASH', 'SETUP'].includes(game.phase);
+function phaseLabel() {
+  if (['READY', 'EXPLORE', 'GUESS'].includes(game.phase)) return `P${game.turn + 1}_${game.phase}`;
+  return game.phase;
+}
+function locName(loc) { if (!loc) return '—'; return [loc.label, loc.city].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', '); }
+
+/* =====================================================================
+   PAIRING — kura ve konum ataması
+   ===================================================================== */
+const Pairing = {
+  roundCount(n) { return Math.floor(n / 2); },
+  build(players, oddMode) {
+    const ids = shuffle(players.map(p => p.id));
+    let bye = null;
+    if (ids.length % 2 === 1 && oddMode === 'bye') bye = ids.pop();
+    const pairs = [];
+    for (let i = 0; i + 1 < ids.length; i += 2) pairs.push([ids[i], ids[i + 1]]);
+    if (ids.length % 2 === 1 && pairs.length) pairs[pairs.length - 1].push(ids[ids.length - 1]); // üçlü son round
+    return { pairs, bye };
+  },
+  // Yalnızca bekleyen (pending) round'lara konum atar; oynanmış/oynanan round'ların konumlarına dokunmaz.
+  assignLocations(matches, mode) {
+    const fixed = new Set(matches.filter(m => m.status !== 'pending').map(m => m.locationId));
+    const targets = matches.filter(m => m.status === 'pending' && !m.isFinal);
+    let pool = locations.filter(l => l.active && !fixed.has(l.id) && l.coverage !== false);
+    if (pool.length < targets.length) pool = locations.filter(l => l.active && !fixed.has(l.id));
+    // Rastgele mod: önceki oyunlarda en az oynanan konumlar önce gelir → her oyunda aynı yerler çıkmaz
+    if (mode === 'random') pool = shuffle(pool).sort((a, b) => (a.playCount || 0) - (b.playCount || 0));
+    targets.forEach((m, i) => {
+      const id = pool[i] ? pool[i].id : null;
+      if (m.locationId !== id) { m.locationId = id; m.pano = null; m.target = null; m.pov = null; }
+    });
+  },
+  unusedLocations(exceptMatch) {
+    const used = new Set(game.matches.filter(m => m !== exceptMatch).map(m => m.locationId));
+    return locations.filter(l => l.active && !used.has(l.id));
+  },
+};
+
+/* =====================================================================
+   SCORING — puanlama, sıralama, ödüller
+   ===================================================================== */
+const Scoring = {
+  points(distKm) {
+    if (distKm == null) return 0;
+    if (distKm * 1000 < settings.perfectMeters) return settings.scoreMax;
+    return Math.round(settings.scoreMax * Math.exp(-distKm / settings.scoreScaleKm));
+  },
+  finalize(m) {
+    const rs = m.players.map(pid => { if (!m.results[pid]) m.results[pid] = { guess: null, timeMs: null, remainingMs: null, lastSecond: false, auto: true }; return m.results[pid]; });
+    rs.forEach(r => { r.distKm = r.guess ? haversineKm(r.guess, m.target) : null; r.points = this.points(r.distKm); r.bonus = 0; r.win = false; });
+    const withGuess = rs.filter(r => r.distKm != null);
+    if (withGuess.length) {
+      const min = Math.min(...withGuess.map(r => r.distKm));
+      const winners = withGuess.filter(r => r.distKm - min <= settings.tieMeters / 1000);
+      const share = Math.round(settings.winBonus / winners.length); // beraberlikte bonus bölünür
+      winners.forEach(r => { r.win = true; r.bonus = share; });
+    }
+    rs.forEach(r => r.total = r.points + r.bonus);
+    m.status = 'done';
+    game.lastDoneMatchId = m.id;
+    const loc = locById(m.locationId); if (loc) loc.playCount = (loc.playCount || 0) + 1;
+  },
+  // Lider tablosu: her oyuncunun normal round sonucu (final düellosu hariç)
+  standings() {
+    const reg = regularMatches();
+    const rows = game.players.map(p => {
+      const m = reg.find(mm => mm.players.includes(p.id));
+      const row = { pid: p.id, name: p.name, total: 0, played: false, bye: game.byeId === p.id, opp: '', distKm: null, noGuess: false, win: false, matchNo: m ? m.no : 999, matchId: m ? m.id : null };
+      if (m) {
+        row.opp = m.players.filter(x => x !== p.id).map(nameOf).join(' & ');
+        const r = m.results[p.id];
+        if (m.status === 'done' && r) { row.played = true; row.total = r.total; row.distKm = r.distKm; row.noGuess = r.distKm == null; row.win = r.win; }
+      }
+      return row;
+    });
+    rows.sort((a, b) => (b.played - a.played) || (b.total - a.total) || ((a.distKm ?? 1e9) - (b.distKm ?? 1e9)) || (a.bye - b.bye) || (a.matchNo - b.matchNo) || a.name.localeCompare(b.name, 'tr'));
+    return rows;
+  },
+  podium() {
+    const st = this.standings().filter(r => r.played);
+    const fm = game.matches.find(m => m.isFinal && m.status === 'done');
+    let order = st.map(r => r.pid);
+    if (fm) {
+      const [a, b] = fm.players, ra = fm.results[a], rb = fm.results[b];
+      let first = a, second = b;
+      if ((rb.win && !ra.win) || (rb.win === ra.win && rb.total > ra.total)) { first = b; second = a; }
+      order = [first, second, ...order.filter(x => x !== first && x !== second)];
+    }
+    return order.slice(0, 3).map(pid => {
+      const row = st.find(r => r.pid === pid) || { total: 0 };
+      const fr = fm && fm.results[pid];
+      return { pid, name: nameOf(pid), total: row.total, final: fr ? fr.total : null };
+    });
+  },
+  awards() {
+    const turns = [];
+    game.matches.filter(m => m.status === 'done').forEach(m => m.players.forEach(pid => { const r = m.results[pid]; if (r) turns.push({ pid, m, r }); }));
+    const minBy = (arr, f) => arr.slice().sort((a, b) => f(a) - f(b))[0];
+    const g = turns.filter(t => t.r.distKm != null);
+    const sharp = minBy(g, t => t.r.distKm);
+    const lost = minBy(g, t => -t.r.distKm);
+    const fast = minBy(turns.filter(t => t.r.guess && !t.r.auto && t.r.timeMs != null), t => t.r.timeMs);
+    const lastS = minBy(turns.filter(t => t.r.guess && t.r.lastSecond), t => t.r.remainingMs ?? 0);
+    let close = null;
+    game.matches.filter(m => m.status === 'done' && m.players.length >= 2).forEach(m => {
+      const tot = m.players.map(pid => ({ pid, t: (m.results[pid] || {}).total || 0 })).sort((a, b) => b.t - a.t);
+      const diff = tot[0].t - tot[1].t;
+      if (!close || diff < close.diff) close = { m, diff, a: tot[0].pid, b: tot[1].pid };
+    });
+    const where = m => locName(locById(m.locationId));
+    return [
+      { emoji: '🎯', title: 'Keskin Nişancı', sub: 'En yakın tahmin', name: sharp ? nameOf(sharp.pid) : '—', detail: sharp ? `${fmtDist(sharp.r.distKm)} • ${where(sharp.m)}` : 'Kimse tahmin etmedi' },
+      { emoji: '🧳', title: 'Kayıp Bavul', sub: 'En uzak tahmin', name: lost ? nameOf(lost.pid) : '—', detail: lost ? `${fmtDist(lost.r.distKm)} öteden selam! • ${where(lost.m)}` : '—' },
+      { emoji: '⚡', title: 'Şimşek', sub: 'En hızlı tahmin', name: fast ? nameOf(fast.pid) : '—', detail: fast ? `${fmtSec(fast.r.timeMs)}'de karar verdi` : 'Herkes süreyi sonuna kadar kullandı' },
+      { emoji: '⏱️', title: 'Son Saniyeci', sub: `Son ${settings.lastSecondWindow} saniyede tahmin`, name: lastS ? nameOf(lastS.pid) : '—', detail: lastS ? `${fmtSec(lastS.r.remainingMs || 0)} kala pin attı` : 'Kimse riske girmedi' },
+      { emoji: '🤝', title: 'Kıl Payı', sub: 'En yakın skorlu düello', name: close ? `${nameOf(close.a)} & ${nameOf(close.b)}` : '—', detail: close ? `Sadece ${fmtPts(close.diff)} puan fark` : '—' },
+    ];
+  },
+};
+
+/* =====================================================================
+   GOOGLE MAPS YÜKLEYİCİ
+   ===================================================================== */
+const MapsLoader = {
+  state: 'idle', // idle | loading | ready | error | auth | nokey
+  // Key yoksa API yine key'siz yüklenir: yalnızca StreetViewService (konum arama/kapsama testi) için kullanılır.
+  // Key'siz yüklenen panorama ters renkli ve damgalı göründüğü için görüntü o modda iframe embed ile gösterilir.
+  load() {
+    const key = apiKey();
+    if (window.google && google.maps && google.maps.StreetViewService) { this.state = 'ready'; return Promise.resolve(); }
+    this.state = 'loading';
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.state = 'error'; reject(new Error('timeout')); }, settings.mapsLoadTimeoutMs || 15000);
+      window.__gdMapsReady = () => { clearTimeout(timer); this.state = 'ready'; resolve(); };
+      const s = document.createElement('script');
+      s.src = `https://maps.googleapis.com/maps/api/js?${key ? 'key=' + encodeURIComponent(key) + '&' : ''}libraries=geometry&v=weekly&language=tr&callback=__gdMapsReady&loading=async`;
+      s.async = true;
+      s.onerror = () => { clearTimeout(timer); this.state = 'error'; s.remove(); reject(new Error('network')); };
+      document.head.appendChild(s);
+    });
+  },
+};
+// Google, key geçersiz/kısıtlıysa bu global fonksiyonu çağırır (yüklemeden sonra da gelebilir)
+window.gm_authFailure = () => { if (!apiKey()) return; MapsLoader.state = 'auth'; try { Flow.stopTimer(); SV.hide(); } catch (e) { /* yoksay */ } Boot.apiSetup(true); };
+
+/* =====================================================================
+   STREET VIEW
+   ===================================================================== */
+const SV = {
+  service: null, pano: null, active: false, reverting: false,
+  startPano: null, startLatLng: null, startPov: null, lastValid: null,
+  opts() {
+    const g = google.maps;
+    return {
+      addressControl: false, showRoadLabels: false, fullscreenControl: false, enableCloseButton: false,
+      motionTracking: false, motionTrackingControl: false, imageDateControl: false,
+      linksControl: true, clickToGo: true, zoomControl: true, panControl: true, scrollwheel: true,
+      zoomControlOptions: { position: g.ControlPosition.LEFT_BOTTOM },
+      panControlOptions: { position: g.ControlPosition.LEFT_BOTTOM },
+    };
+  },
+  ensureService() { if (!this.service && window.google && google.maps) this.service = new google.maps.StreetViewService(); return this.service; },
+  ensurePano() {
+    if (this.pano) return;
+    this.ensureService();
+    this.pano = new google.maps.StreetViewPanorama($('#sv'), Object.assign(this.opts(), { visible: false }));
+    this.pano.addListener('position_changed', () => this.onMove());
+    this.pano.addListener('status_changed', () => {
+      if (!this.active) return;
+      if (this.pano.getStatus() !== google.maps.StreetViewStatus.OK) {
+        setTimeout(() => { if (this.active && this.pano.getStatus() !== google.maps.StreetViewStatus.OK) Flow.panoError(); }, 1500);
+      }
+    });
+  },
+  fetch(req) {
+    return new Promise(res => {
+      try { this.service.getPanorama(req, (data, status) => res(status === google.maps.StreetViewStatus.OK && data && data.location ? data : null)); }
+      catch (e) { console.warn(e); res(null); }
+    });
+  },
+  // 'api' = key ile tam kontrollü panorama; 'embed' = key'siz iframe (hareket sınırı uygulanamaz)
+  get mode() { return apiKey() ? 'api' : 'embed'; },
+  embedUrl(id, lat, lng, pov) {
+    return `https://www.google.com/maps/embed?pb=!4v${Date.now()}!6m8!1m7!1s${encodeURIComponent(id)}!2m2!1d${lat}!2d${lng}!3f${pov.heading}!4f${pov.pitch}!5f0.78`;
+  },
+  // Konum için resmi, dış mekân Google panoramasını bul (kayıtlı panoId → 50 m → yedek yarıçap)
+  async resolve(loc) {
+    if (!this.ensureService()) {
+      // Servis yoksa (ör. key'siz yükleme başarısız) kayıtlı pano ID ile devam
+      return loc.panoId ? { panoId: loc.panoId, lat: +loc.lat, lng: +loc.lng, widened: false } : null;
+    }
+    const g = google.maps;
+    if (loc.panoId) {
+      const d = await this.fetch({ pano: loc.panoId });
+      if (d) return { panoId: d.location.pano, lat: d.location.latLng.lat(), lng: d.location.latLng.lng(), widened: false };
+    }
+    const base = { location: { lat: +loc.lat, lng: +loc.lng }, sources: [g.StreetViewSource.GOOGLE, g.StreetViewSource.OUTDOOR], preference: g.StreetViewPreference.NEAREST };
+    let data = await this.fetch(Object.assign({ radius: settings.panoSearchRadius }, base)), widened = false;
+    if (!data && settings.fallbackSearchRadius > settings.panoSearchRadius) {
+      data = await this.fetch(Object.assign({ radius: settings.fallbackSearchRadius }, base)); widened = !!data;
+    }
+    if (!data) return null;
+    return { panoId: data.location.pano, lat: data.location.latLng.lat(), lng: data.location.latLng.lng(), widened };
+  },
+  show(m) {
+    const cover = $('#sv-cover'); cover.classList.add('on');
+    document.body.classList.toggle('sv-embed', this.mode === 'embed');
+    if (this.mode === 'embed') {
+      this.embedM = m; this.active = true;
+      $('#sv').innerHTML = `<iframe src="${this.embedUrl(m.pano.id, m.pano.lat, m.pano.lng, m.pov)}" style="width:100%;height:100%;border:0" allow="fullscreen" referrerpolicy="no-referrer-when-downgrade"></iframe>`;
+      setTimeout(() => cover.classList.remove('on'), 1200);
+      return;
+    }
+    this.ensurePano();
+    this.startPano = m.pano.id;
+    this.startLatLng = new google.maps.LatLng(m.pano.lat, m.pano.lng);
+    this.startPov = { heading: m.pov.heading, pitch: m.pov.pitch };
+    this.lastValid = m.pano.id; this.reverting = false; this.active = true;
+    this.pano.setPano(m.pano.id); this.pano.setPov(this.startPov); this.pano.setZoom(1);
+    this.pano.setVisible(true);
+    setTimeout(() => cover.classList.remove('on'), 650);
+  },
+  onMove() {
+    if (!this.active || !this.startLatLng) return;
+    const pos = this.pano.getPosition(); if (!pos) return;
+    const d = google.maps.geometry.spherical.computeDistanceBetween(this.startLatLng, pos);
+    if (d > settings.moveRadiusMeters + .5) {
+      if (this.reverting) return;
+      this.reverting = true;
+      const back = this.lastValid;
+      setTimeout(() => { this.pano.setPano(back); setTimeout(() => { this.reverting = false; }, 400); }, 0);
+      UI.toast('🚧 Hareket sınırına ulaştın', 'warn', 1600); Sound.error();
+    } else {
+      this.lastValid = this.pano.getPano();
+      HUD.move(d);
+    }
+  },
+  resetToStart() {
+    if (!this.active) return;
+    if (this.mode === 'embed') { const m = this.embedM; const f = $('#sv iframe'); if (f && m) f.src = this.embedUrl(m.pano.id, m.pano.lat, m.pano.lng, m.pov); Sound.pop(); return; }
+    this.pano.setPano(this.startPano); this.pano.setPov(this.startPov); this.pano.setZoom(1);
+    HUD.move(0); Sound.pop();
+  },
+  hide() {
+    this.active = false;
+    if (this.mode === 'embed') { if (!this.pano) $('#sv').innerHTML = ''; }
+    else if (this.pano) this.pano.setVisible(false);
+    $('#sv-cover').classList.add('on');
+  },
+};
+
+/* =====================================================================
+   GUESS MAP — Leaflet tahmin haritası
+   ===================================================================== */
+// CARTO Voyager artık ücretsiz bir key istiyor (key yoksa karolarda "API KEY REQUIRED" filigranı çıkar).
+// Key yoksa OpenStreetMap standart karolarına düşülür.
+const cartoKey = () => String(settings.cartoKey || CONFIG.CARTO_API_KEY || '').trim();
+function addTiles(map) {
+  const key = cartoKey();
+  const layer = key
+    ? L.tileLayer(`https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(key)}`, {
+      subdomains: 'abcd', maxZoom: 19, attribution: '&copy; OpenStreetMap katkıcıları &copy; CARTO',
+    })
+    // OSM'nin kendi sunucusu file:// ile açılınca (referrer yok) "Access blocked" döndürür; Esri key/referrer istemez
+    : L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19, attribution: 'Harita &copy; Esri, HERE, Garmin, &copy; OpenStreetMap katkıcıları',
+    });
+  let errors = 0;
+  layer.on('tileerror', () => { errors++; if (errors === 6) UI.toast('Harita karoları yüklenemiyor — internet bağlantısını kontrol et', 'warn', 4000); });
+  layer.addTo(map);
+  return layer;
+}
+function pinIcon(color, label = '') {
+  return L.divIcon({ className: 'pin-icon', html: `<div class="pin" style="--c:${color}"><span>${esc(label)}</span></div>`, iconSize: [40, 52], iconAnchor: [20, 48] });
+}
+function targetIcon() {
+  return L.divIcon({ className: 'target-icon', html: '<div class="target"><div class="ring"></div><div class="flag">🏁</div></div>', iconSize: [64, 64], iconAnchor: [32, 32] });
+}
+const GuessMap = {
+  map: null, marker: null, color: PLAYER_COLORS[0],
+  ensure() {
+    if (this.map) { this.map.invalidateSize(); return; }
+    this.map = L.map('guess-map', { worldCopyJump: true, minZoom: 1, zoomSnap: .5, attributionControl: true }).setView([20, 10], 1.5);
+    addTiles(this.map);
+    this.map.on('click', e => this.place(e.latlng));
+    const wrap = $('#gm-wrap');
+    wrap.addEventListener('transitionend', e => { if (e.target === wrap && (e.propertyName === 'width' || e.propertyName === 'height')) this.map.invalidateSize(); });
+    $('#btn-guess').addEventListener('click', () => Flow.submit(false));
+    // Dokunmatik cihazlarda "üzerine gelme" yok: ilk dokunuş haritayı büyütür, pin koymaz
+    const touch = () => window.matchMedia('(hover: none)').matches;
+    wrap.addEventListener('pointerdown', e => {
+      if (!touch() || !wrap.classList.contains('mini') || wrap.classList.contains('expanded') || e.target.closest('button')) return;
+      wrap.classList.add('expanded'); this.ignoreClickUntil = Date.now() + 500;
+      [60, 350].forEach(t => setTimeout(() => this.map.invalidateSize(), t));
+    }, true);
+    $('#gm-collapse').addEventListener('click', e => { e.stopPropagation(); this.collapse(); });
+  },
+  collapse() { const w = $('#gm-wrap'); if (!w.classList.contains('expanded')) return; w.classList.remove('expanded'); [60, 350].forEach(t => setTimeout(() => this.map && this.map.invalidateSize(), t)); },
+  reset(color) { this.color = color; this.clear(); if (this.map) this.map.setView([20, 10], 1.5, { animate: false }); },
+  clear() { if (this.marker && this.map) this.map.removeLayer(this.marker); this.marker = null; this.update(); },
+  place(ll) {
+    if (!Flow.canPin() || Date.now() < (this.ignoreClickUntil || 0)) return;
+    ll = ll.wrap();
+    if (this.marker) this.marker.setLatLng(ll);
+    else this.marker = L.marker(ll, { icon: pinIcon(this.color), keyboard: false }).addTo(this.map);
+    Sound.pop(); Flow.onPin(); this.update();
+  },
+  getGuess() { if (!this.marker) return null; const ll = this.marker.getLatLng(); return { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) }; },
+  update() {
+    $('#btn-guess').disabled = !this.marker;
+    $('#gm-hint').textContent = this.marker ? 'Pin yerleşti — başka yere tıklayarak taşıyabilirsin' : 'Haritaya tıklayıp pin koy';
+  },
+  setMode(mode) {
+    const w = $('#gm-wrap');
+    w.classList.remove('expanded');
+    w.classList.toggle('mini', mode === 'mini'); w.classList.toggle('full', mode === 'full');
+    [60, 350, 700].forEach(t => setTimeout(() => this.map && this.map.invalidateSize(), t));
+  },
+};
+const RevealMap = {
+  map: null, layer: null,
+  ensure() {
+    if (!this.map) {
+      this.map = L.map('reveal-map', { worldCopyJump: true, minZoom: 1, zoomSnap: .25 });
+      addTiles(this.map);
+      this.layer = L.layerGroup().addTo(this.map);
+    }
+    this.map.invalidateSize();
+    this.layer.clearLayers();
+    this.map.setView([20, 10], 2, { animate: false });
+  },
+};
+
+/* =====================================================================
+   ZAMANLAYICI + HUD
+   ===================================================================== */
+class Countdown {
+  constructor(seconds, { onTick, onEnd, onSecond } = {}) {
+    this.total = seconds * 1000; this.remaining = this.total; this.elapsed = 0;
+    this.onTick = onTick; this.onEnd = onEnd; this.onSecond = onSecond;
+    this.running = false; this.paused = false; this._iv = null; this._lastSec = Math.ceil(this.remaining / 1000);
+  }
+  start() { this.running = true; this._last = performance.now(); this._loop(); }
+  _loop() {
+    if (!this.running) return;
+    const now = performance.now(), dt = now - this._last; this._last = now;
+    if (!this.paused) {
+      this.remaining -= dt; this.elapsed += dt;
+      const s = Math.ceil(Math.max(0, this.remaining) / 1000);
+      if (s !== this._lastSec) { this._lastSec = s; if (this.onSecond) this.onSecond(s); }
+    }
+    if (this.onTick) this.onTick(this);
+    if (this.remaining <= 0) { this.remaining = 0; this.stop(); if (this.onEnd) this.onEnd(); return; }
+    // setInterval: pencere arka planda kalsa bile süre doğru işler (rAF durur)
+    if (!this._iv) this._iv = setInterval(() => this._loop(), 50);
+  }
+  pause() { this.paused = true; }
+  resume() { this.paused = false; this._last = performance.now(); }
+  add(ms) { this.remaining += ms; if (this.remaining > this.total) this.total = this.remaining; this._lastSec = Math.ceil(this.remaining / 1000); }
+  stop() { this.running = false; clearInterval(this._iv); this._iv = null; }
+}
+const HUD = {
+  C: 2 * Math.PI * 52,
+  timer(rem, total, label, infinite = false) {
+    const el = $('#hud-timer'), prg = $('#timer-prg');
+    if (infinite) {
+      $('#timer-num').textContent = '∞'; prg.style.strokeDashoffset = 0; el.classList.remove('urgent'); $('#scr-play').classList.remove('urgent');
+    } else {
+      $('#timer-num').textContent = Math.ceil(rem / 1000);
+      prg.style.strokeDashoffset = this.C * (1 - (total ? rem / total : 0));
+      const urgent = rem <= 5000 && rem > 0;
+      el.classList.toggle('urgent', urgent); $('#scr-play').classList.toggle('urgent', urgent);
+    }
+    $('#timer-lbl').textContent = label;
+  },
+  move(d) {
+    const r = settings.moveRadiusMeters, v = Math.min(d, r);
+    $('#move-txt').textContent = `${Math.round(v)} / ${r} m`;
+    const fill = $('#move-fill');
+    fill.style.width = (r > 0 ? v / r * 100 : 100) + '%';
+    fill.classList.toggle('hot', r === 0 || v / r > .8);
+  },
+};
+
+/* =====================================================================
+   UI — ekran geçişleri, modal, toast
+   ===================================================================== */
+const UI = {
+  _modals: [],
+  show(id) {
+    $$('.screen').forEach(s => s.classList.toggle('active', s.id === id));
+    document.body.dataset.screen = id;
+  },
+  toast(msg, type = 'info', ms = 2400) {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`; el.innerHTML = msg;
+    const root = $('#toast-root'); root.appendChild(el);
+    while (root.children.length > 4) root.firstChild.remove();
+    setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 400); }, ms);
+  },
+  topModal() { return this._modals[this._modals.length - 1] || null; },
+  modal({ title = '', html = '', buttons = [{ label: 'Tamam', value: true, primary: true }], wide = false, dismissable = true, onOpen = null } = {}) {
+    return new Promise(resolve => {
+      const wrap = document.createElement('div'); wrap.className = 'modal-wrap';
+      wrap.innerHTML = `<div class="modal ${wide ? 'wide' : ''}"><h3>${title}</h3><div class="modal-body">${html}</div><div class="modal-actions"></div></div>`;
+      const entry = { wrap, dismissable, primary: null, close: null };
+      entry.close = v => { wrap.remove(); this._modals = this._modals.filter(x => x !== entry); resolve(v); };
+      const acts = wrap.querySelector('.modal-actions');
+      buttons.forEach(b => {
+        const btn = document.createElement('button');
+        btn.className = 'btn ' + (b.cls || (b.primary ? '' : 'ghost')); btn.innerHTML = b.label;
+        btn.onclick = async () => { if (b.onClick) { const r = await b.onClick(wrap); if (r === false) return; } entry.close(b.value); };
+        acts.appendChild(btn); if (b.primary) entry.primary = btn;
+      });
+      if (dismissable) wrap.addEventListener('mousedown', e => { if (e.target === wrap) entry.close(undefined); });
+      $('#modal-root').appendChild(wrap); this._modals.push(entry);
+      if (onOpen) onOpen(wrap);
+    });
+  },
+  confirm(msg, { title = 'Emin misin?', ok = 'Evet', cancel = 'Vazgeç', danger = false } = {}) {
+    return this.modal({ title, html: `<p>${msg}</p>`, buttons: [{ label: cancel, value: false }, { label: ok, value: true, primary: true, cls: danger ? 'danger' : '' }] }).then(v => !!v);
+  },
+  alert(msg, title = 'Bilgi') { return this.modal({ title, html: `<p>${msg}</p>` }); },
+  escape() {
+    const t = this.topModal();
+    if (t) { if (t.dismissable) t.close(undefined); return; }
+    if (Admin.open) { Admin.close(); return; }
+    if (LeaderOverlay.open) { LeaderOverlay.close(); return; }
+    if ($('#help').classList.contains('show')) this.toggleHelp(false);
+  },
+  toggleHelp(force) { $('#help').classList.toggle('show', force); },
+  fullscreen() {
+    try {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    } catch (e) { UI.toast('Tam ekran desteklenmiyor', 'warn'); }
+  },
+  updateTopbar() {
+    $('#tb-mute').textContent = settings.soundEnabled ? '🔊' : '🔇';
+    document.body.classList.toggle('in-play', ['EXPLORE', 'GUESS'].includes(game.phase));
+  },
+};
+
+/* =====================================================================
+   NOMINATIM — ters coğrafi kodlama (istekler arası ≥1 sn)
+   ===================================================================== */
+const Geocoder = {
+  chain: Promise.resolve(), last: 0,
+  reverse(lat, lng) {
+    const job = this.chain.then(async () => {
+      const wait = Math.max(0, this.last + 1100 - Date.now());
+      if (wait) await sleep(wait);
+      this.last = Date.now();
+      try {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=12&addressdetails=1&accept-language=tr`;
+        const r = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json(); const a = j.address || {};
+        if (!a.country) return null;
+        return {
+          country: a.country, countryCode: (a.country_code || '').toLowerCase(),
+          city: a.city || a.town || a.village || a.municipality || a.county || a.state_district || a.state || '',
+        };
+      } catch (e) { console.warn('Nominatim hatası', e); return null; }
+    });
+    this.chain = job.catch(() => null);
+    return job;
+  },
+};
+
+/* =====================================================================
+   SPLASH DÜNYA ANİMASYONU (canvas — noktalı küre + uçuş yayları)
+   ===================================================================== */
+function slerp(a, b, t) {
+  const d = clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1), w = Math.acos(d);
+  if (w < 1e-4) return a.slice();
+  const s = Math.sin(w), k1 = Math.sin((1 - t) * w) / s, k2 = Math.sin(t * w) / s;
+  return [a[0] * k1 + b[0] * k2, a[1] * k1 + b[1] * k2, a[2] * k1 + b[2] * k2];
+}
+const Globe = {
+  start() {
+    const cv = $('#globe'); if (!cv) return;
+    const ctx = cv.getContext('2d');
+    const N = 1100, pts = [], ga = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < N; i++) { const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), th = ga * i; pts.push([Math.cos(th) * r, y, Math.sin(th) * r]); }
+    const rnd = () => pts[Math.floor(Math.random() * N)];
+    const newArc = () => ({ a: rnd(), b: rnd(), t: 0, sp: .004 + Math.random() * .006, hue: Math.random() < .5 ? '34,211,238' : '244,114,182' });
+    const arcs = Array.from({ length: 9 }, () => Object.assign(newArc(), { t: Math.random() }));
+    let rot = 0; const tilt = .38;
+    const draw = () => {
+      requestAnimationFrame(draw);
+      if (!$('#scr-splash').classList.contains('active')) return;
+      const dpr = Math.min(2, window.devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
+      if (!W || !H) return;
+      if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+      const R = Math.min(W, H) * .42, cx = W / 2, cy = H / 2;
+      const g = ctx.createRadialGradient(cx, cy, R * .2, cx, cy, R * 1.3);
+      g.addColorStop(0, 'rgba(90,60,220,.35)'); g.addColorStop(.75, 'rgba(34,211,238,.08)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R * 1.3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(12,14,52,.55)'; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(130,170,255,.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+      rot += .0025;
+      const cr = Math.cos(rot), sr = Math.sin(rot), ct = Math.cos(tilt), st = Math.sin(tilt);
+      const proj = p => { const x = p[0] * cr + p[2] * sr, z = -p[0] * sr + p[2] * cr, y = p[1]; return [cx + x * R, cy - (y * ct - z * st) * R, y * st + z * ct]; };
+      for (const p of pts) { const [x, y, z] = proj(p); if (z < 0) continue; ctx.fillStyle = `rgba(167,139,250,${.15 + z * .75})`; const s = .8 + z * 1.7; ctx.fillRect(x - s / 2, y - s / 2, s, s); }
+      for (const a of arcs) {
+        a.t += a.sp; if (a.t > 1.45) Object.assign(a, newArc());
+        const head = Math.min(1, a.t), tail = Math.max(0, a.t - .45);
+        ctx.beginPath(); let started = false;
+        for (let i = 0; i <= 40; i++) {
+          const t = tail + (head - tail) * i / 40, p = slerp(a.a, a.b, t), h = 1 + .22 * Math.sin(Math.PI * t);
+          const q = proj([p[0] * h, p[1] * h, p[2] * h]);
+          if (q[2] < -.05) { started = false; continue; }
+          if (!started) { ctx.moveTo(q[0], q[1]); started = true; } else ctx.lineTo(q[0], q[1]);
+        }
+        ctx.strokeStyle = `rgba(${a.hue},.9)`; ctx.lineWidth = 2; ctx.shadowColor = `rgba(${a.hue},1)`; ctx.shadowBlur = 10; ctx.stroke(); ctx.shadowBlur = 0;
+        if (a.t <= 1) {
+          const p = slerp(a.a, a.b, a.t), h = 1 + .22 * Math.sin(Math.PI * a.t), q = proj(p.map(v => v * h));
+          if (q[2] >= -.05) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 3, 0, Math.PI * 2); ctx.fill(); }
+        }
+      }
+    };
+    draw();
+  },
+};
+
+/* =====================================================================
+   LİDER TABLOSU (FLIP animasyonlu)
+   ===================================================================== */
+const Leaderboard = {
+  head() { return '<div class="lb-hrow"><div class="c">#</div><div>İsim</div><div>Rakip</div><div class="r">Mesafe</div><div class="r">Puan</div><div class="c">Sonuç</div></div>'; },
+  fill(el, r, rank, just) {
+    const medal = r.played && rank <= 3 ? ['gold', 'silver', 'bronze'][rank - 1] : '';
+    el.className = `lb-row ${r.played ? '' : 'pending'} ${medal} ${just ? 'just' : ''}`;
+    const rankTxt = r.played ? (rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : rank) : '·';
+    const tag = r.bye ? '<span class="tag">Bay</span>' : '<span class="tag">Sırada</span>';
+    el.innerHTML = `<div class="lb-rank">${rankTxt}</div><div class="name">${esc(r.name)}</div>`
+      + `<div class="opp">${r.bye ? 'Bay geçti' : (r.opp ? 'vs ' + esc(r.opp) : '—')}</div>`
+      + `<div class="dist">${r.played ? (r.noGuess ? 'Tahmin yok' : fmtDist(r.distKm)) : '—'}</div>`
+      + `<div class="pts">${r.played ? fmtPts(r.total) : '—'}</div><div class="res">${r.played ? (r.win ? '🏆' : '—') : tag}</div>`;
+  },
+  render(host, { animate = true } = {}) {
+    this.stopScroll(host);
+    const rows = Scoring.standings();
+    const order = rows.map(r => r.pid);
+    const byPid = Object.fromEntries(rows.map(r => [r.pid, r]));
+    const lastM = game.matches.find(m => m.id === game.lastDoneMatchId);
+    const just = new Set(lastM ? lastM.players : []);
+    const two = rows.length > 14 && window.innerWidth > 900;
+    host.innerHTML = `<div class="lb-heads" style="--cols:${two ? 2 : 1}">${this.head()}${two ? this.head() : ''}</div><div class="lb-grid ${two ? 'two' : ''}" style="--rows:${Math.ceil(rows.length / (two ? 2 : 1))}"></div>`;
+    const grid = host.querySelector('.lb-grid');
+    const prev = game.lbPrevOrder || [];
+    const canAnim = animate && prev.length === order.length && prev.every(p => byPid[p]) && prev.some((p, i) => p !== order[i]);
+    (canAnim ? prev : order).forEach((pid, i) => { const el = document.createElement('div'); el.dataset.pid = pid; this.fill(el, byPid[pid], i + 1, just.has(pid)); grid.appendChild(el); });
+    game.lbPrevOrder = order; save();
+    if (!canAnim) { this.autoScroll(host); return; }
+    // Önce eski sıralama gösterilir, sonra satırlar yeni yerlerine kayar (FLIP)
+    setTimeout(() => {
+      if (!grid.isConnected) return;
+      const els = new Map($$('.lb-row', grid).map(el => [el.dataset.pid, el]));
+      const first = new Map([...els].map(([k, el]) => [k, el.getBoundingClientRect()]));
+      order.forEach((pid, i) => { const el = els.get(pid); this.fill(el, byPid[pid], i + 1, just.has(pid)); grid.appendChild(el); });
+      els.forEach((el, pid) => {
+        const a = first.get(pid), b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+        if (dx || dy) el.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'none' }], { duration: 1000, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      });
+      Sound.whoosh();
+      setTimeout(() => this.autoScroll(host), 1100);
+    }, 850);
+  },
+  // 35 kişi sığmazsa yavaş otomatik kaydırma
+  autoScroll(host) {
+    const grid = host.querySelector('.lb-grid'); if (!grid) return;
+    this.stopScroll(host);
+    if (grid.scrollHeight <= grid.clientHeight + 4) return;
+    let dir = 1, hold = 100;
+    host._lbScroll = setInterval(() => {
+      if (!grid.isConnected) return this.stopScroll(host);
+      if (hold > 0) { hold--; return; }
+      grid.scrollTop += dir;
+      if (dir > 0 && grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 1) { dir = -1; hold = 100; }
+      else if (dir < 0 && grid.scrollTop <= 0) { dir = 1; hold = 100; }
+    }, 30);
+  },
+  stopScroll(host) { if (host && host._lbScroll) { clearInterval(host._lbScroll); host._lbScroll = null; } },
+};
+const LeaderOverlay = {
+  open: false,
+  toggle() { this.open ? this.close() : this.show(); },
+  show() {
+    if (!game.matches.length) { UI.toast('Lider tablosu kura çekildikten sonra oluşur'); return; }
+    if (!this.open) { this.open = true; Flow.hold(); }
+    const done = regularMatches().filter(m => m.status === 'done').length;
+    $('#lbo-sub').textContent = `${done} / ${regularMatches().length} round tamamlandı`;
+    $('#ov-leader').classList.add('show');
+    Leaderboard.render($('#lb-overlay'));
+  },
+  close() { if (!this.open) return; this.open = false; $('#ov-leader').classList.remove('show'); Leaderboard.stopScroll($('#lb-overlay')); Flow.release(); },
+};
+
+/* =====================================================================
+   KAYIT EKRANI
+   ===================================================================== */
+const SetupView = {
+  parse() {
+    const names = $('#players-ta').value.split(/\r?\n/).map(s => s.trim().replace(/\s+/g, ' ')).filter(Boolean);
+    const seen = new Map(); names.forEach(n => { const k = trLower(n); seen.set(k, (seen.get(k) || 0) + 1); });
+    const dups = [...new Set(names.filter(n => seen.get(trLower(n)) > 1).map(trLower))];
+    return { names, dups };
+  },
+  update() {
+    const { names, dups } = this.parse(), n = names.length, odd = n % 2 === 1 && n >= 3;
+    const mode = game.oddMode || settings.oddMode, r = Pairing.roundCount(n);
+    $('#st-count').textContent = n; $('#st-rounds').textContent = r;
+    $('#odd-box').hidden = !odd;
+    $$('#odd-box .radio-card').forEach(c => { const on = c.dataset.mode === mode; c.classList.toggle('on', on); c.querySelector('input').checked = on; });
+    let detail = '';
+    if (n >= 2) {
+      if (!odd) detail = `${r} düello • herkes 1 kez oynar`;
+      else if (mode === 'trio') detail = r === 1 ? 'Tek round, 3 kişilik düello' : `${r - 1} ikili düello + son round 3 kişilik`;
+      else detail = `${r} düello • 1 kişi bay geçer`;
+      if (settings.finalDuel) detail += ' • + 👑 Final Düellosu';
+    }
+    $('#st-detail').textContent = detail;
+    const warns = [];
+    if (dups.length) warns.push(`<div class="warn-box">⚠️ Tekrar eden isim${dups.length > 1 ? 'ler' : ''}: <b>${dups.map(esc).join(', ')}</b> — lütfen ayırt edici yaz (ör. "Ayşe K.").</div>`);
+    if (n === 1) warns.push('<div class="warn-box">En az 2 oyuncu gerekli.</div>');
+    const active = locations.filter(l => l.active).length, need = r + (settings.finalDuel ? 1 : 0);
+    if (n >= 2 && active < need) warns.push(`<div class="warn-box">📍 ${need} konum gerekli ama ${active} aktif konum var. Yönetim panelinden (⚙️) konum ekle.</div>`);
+    if (n >= 2 && !warns.length) warns.push(`<div class="info-box">✅ Hazır! Havuzda ${active} aktif konum var.</div>`);
+    $('#st-warn').innerHTML = warns.join('');
+    $('#btn-to-draw').disabled = n < 2 || dups.length > 0 || active < r;
+  },
+  submit() {
+    const { names, dups } = this.parse(); if (names.length < 2 || dups.length) return;
+    const old = new Map(game.players.map(p => [p.name, p.id]));
+    game.players = names.map(name => ({ id: old.get(name) || uid(), name }));
+    game.draftText = $('#players-ta').value; game.draw = null;
+    if (!game.oddMode) game.oddMode = settings.oddMode;
+    Flow.go('DRAW', { fresh: true });
+  },
+};
+
+/* =====================================================================
+   KURA ANİMASYONU + elle yer değiştirme
+   ===================================================================== */
+const DrawView = {
+  token: 0, animating: false, sel: null,
+  setButtons(on) { ['#btn-reshuffle', '#btn-start-game', '#btn-draw-back'].forEach(s => { $(s).disabled = !on; }); },
+  sub() {
+    const d = game.draw;
+    $('#draw-sub').textContent = `${game.players.length} oyuncu • ${d.pairs.length} round${d.bye ? ' • 1 kişi bay' : ''}${d.pairs.some(p => p.length === 3) ? ' • son round üçlü' : ''}`;
+  },
+  slotHTML(pid, mi, si, spinning) {
+    const cls = mi === 'bye' ? 'pbye' : 'p' + (si + 1);
+    return `<div class="slot ${cls}" draggable="true" data-mi="${mi}" data-si="${si}" data-name="${esc(nameOf(pid))}" title="Yer değiştirmek için tıkla veya sürükle">${spinning ? '???' : esc(nameOf(pid))}</div>`;
+  },
+  renderCards(spinning = false) {
+    const d = game.draw, stage = $('#draw-stage');
+    const n = d.pairs.length + (d.bye ? 1 : 0), cols = n <= 3 ? 1 : n <= 20 ? 2 : 3;
+    let html = `<div class="vs-grid" style="--cols:${cols}">`;
+    d.pairs.forEach((p, mi) => {
+      html += `<div class="vs-card glass" style="--d:${mi * .04}s"><span class="rbadge">R${mi + 1}</span>`;
+      p.forEach((pid, si) => { if (si) html += '<span class="vsx">VS</span>'; html += this.slotHTML(pid, mi, si, spinning); });
+      html += '<span class="rbadge" title="Konum gizli">📍❔</span></div>';
+    });
+    if (d.bye) html += `<div class="vs-card glass bye"><span class="rbadge">BAY</span>${this.slotHTML(d.bye, 'bye', 0, spinning)}<span class="muted" style="font-size:.85rem">bu oyunda bay geçiyor</span></div>`;
+    html += '</div><div class="draw-note muted">📍 Konumlar gizli. İki ismin yerini değiştirmek için sırayla ikisine tıkla ya da sürükle-bırak.</div>';
+    stage.innerHTML = html;
+  },
+  async run() {
+    const tk = ++this.token; this.animating = true; this.sel = null; this.setButtons(false); this.sub();
+    const stage = $('#draw-stage');
+    stage.scrollTop = 0;
+    stage.innerHTML = '<div class="draw-cloud"></div>';
+    const cloud = stage.firstChild, W = stage.clientWidth || 1200, H = Math.max(stage.clientHeight, 300);
+    const chips = game.players.map(p => {
+      const c = document.createElement('div'); c.className = 'cloud-chip'; c.textContent = p.name; cloud.appendChild(c);
+      c.style.left = (W / 2 - c.offsetWidth / 2) + 'px'; c.style.top = (H / 2 - c.offsetHeight / 2) + 'px'; return c;
+    });
+    await sleep(60);
+    for (let k = 0; k < 12; k++) {
+      if (tk !== this.token) return;
+      chips.forEach(c => {
+        c.style.left = (10 + Math.random() * Math.max(10, W - c.offsetWidth - 20)) + 'px';
+        c.style.top = (10 + Math.random() * Math.max(10, H - c.offsetHeight - 20)) + 'px';
+        c.style.transform = `rotate(${(Math.random() - .5) * 24}deg) scale(${.85 + Math.random() * .4})`;
+      });
+      Sound.click(); await sleep(150);
+    }
+    chips.forEach(c => { c.style.left = (W / 2 - c.offsetWidth / 2) + 'px'; c.style.top = (H / 2 - c.offsetHeight / 2) + 'px'; c.style.transform = 'scale(.3)'; c.style.opacity = '0'; });
+    Sound.whoosh(); await sleep(480);
+    if (tk !== this.token) return;
+    this.renderCards(true);
+    const slots = $$('.slot', stage), names = game.players.map(p => p.name);
+    await Promise.all(slots.map((el, i) => this.spin(el, 700 + i * 120, names, tk)));
+    if (tk !== this.token) return;
+    Sound.ding(); confettiBurst({ particleCount: 80, origin: { y: .3 } });
+    this.animating = false; this.setButtons(true);
+  },
+  // Slot makinesi efekti: isimler hızla döner, yavaşlar ve gerçek isimde durur
+  spin(el, dur, names, tk) {
+    return new Promise(res => {
+      const final = el.dataset.name; el.classList.add('spinning');
+      const t0 = performance.now(); let next = 0;
+      const step = now => {
+        if (tk !== this.token) return res();
+        const t = now - t0;
+        if (t >= dur) { el.textContent = final; el.classList.remove('spinning'); el.classList.add('landed'); Sound.click(); return res(); }
+        if (now >= next) { el.textContent = names[Math.floor(Math.random() * names.length)]; const p = t / dur; next = now + 40 + p * p * 180; }
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+  },
+  posOf(el) { return { mi: el.dataset.mi === 'bye' ? 'bye' : +el.dataset.mi, si: +el.dataset.si }; },
+  getAt(p) { return p.mi === 'bye' ? game.draw.bye : game.draw.pairs[p.mi][p.si]; },
+  setAt(p, pid) { if (p.mi === 'bye') game.draw.bye = pid; else game.draw.pairs[p.mi][p.si] = pid; },
+  swap(a, b) {
+    if (a.mi === b.mi && a.si === b.si) return;
+    const pa = this.getAt(a), pb = this.getAt(b); if (!pa || !pb) return;
+    this.setAt(a, pb); this.setAt(b, pa);
+    save(); this.renderCards(); Sound.pop();
+    [a, b].forEach(p => { const el = $(`#draw-stage .slot[data-mi="${p.mi}"][data-si="${p.si}"]`); if (el) el.classList.add('flash'); });
+  },
+  bind() {
+    const st = $('#draw-stage');
+    st.addEventListener('click', e => {
+      const s = e.target.closest('.slot'); if (!s || this.animating) return;
+      if (!this.sel || !this.sel.isConnected) { this.sel = s; s.classList.add('sel'); return; }
+      const a = this.posOf(this.sel), b = this.posOf(s); this.sel = null;
+      $$('.slot.sel', st).forEach(x => x.classList.remove('sel'));
+      this.swap(a, b);
+    });
+    st.addEventListener('dragstart', e => {
+      const s = e.target.closest && e.target.closest('.slot');
+      if (!s || this.animating) { e.preventDefault(); return; }
+      e.dataTransfer.setData('text/plain', JSON.stringify(this.posOf(s))); e.dataTransfer.effectAllowed = 'move';
+    });
+    st.addEventListener('dragover', e => { const s = e.target.closest && e.target.closest('.slot'); if (!s) return; e.preventDefault(); $$('.slot.dragover', st).forEach(x => x !== s && x.classList.remove('dragover')); s.classList.add('dragover'); });
+    st.addEventListener('dragleave', e => { const s = e.target.closest && e.target.closest('.slot'); if (s) s.classList.remove('dragover'); });
+    st.addEventListener('drop', e => {
+      const s = e.target.closest && e.target.closest('.slot'); if (!s) return; e.preventDefault(); s.classList.remove('dragover');
+      try { this.swap(JSON.parse(e.dataTransfer.getData('text/plain')), this.posOf(s)); } catch (err) { /* yoksay */ }
+    });
+  },
+};
+
+/* =====================================================================
+   SONUÇ (REVEAL) ANİMASYONU
+   ===================================================================== */
+async function runReveal() {
+  const tk = ++Flow.revealToken; Flow.revealDone = false;
+  const alive = () => tk === Flow.revealToken && game.phase === 'REVEAL';
+  const m = Flow.match(); if (!m || !m.target) return Flow.go('SPLASH');
+  if (m.status !== 'done') { Scoring.finalize(m); save(); }
+  const loc = locById(m.locationId) || {};
+  $('#reveal-title').textContent = Flow.roundLabel(m) + ' • SONUÇ';
+  const lc = $('#loc-card'); lc.classList.remove('show');
+  lc.innerHTML = `<div class="loc-top"><div class="loc-flag">${flagHTML(loc.countryCode, '3.4rem')}</div><div><div class="loc-country">${esc(loc.country || 'Bilinmeyen ülke')}</div><div class="loc-city">${esc(loc.city || '')}</div></div></div>`
+    + `<div class="loc-desc"><b>📍 ${esc(loc.label || '')}</b>${loc.desc ? ' — ' + esc(loc.desc) : ''}</div>`;
+  $('#reveal-players').innerHTML = m.players.map((pid, i) => `<div class="rp glass" style="--pc:${PLAYER_COLORS[i]}" data-pid="${pid}"><div class="rp-name">${esc(nameOf(pid))}</div><div class="rp-stats"><div><small>Mesafe</small><b class="rp-dist">…</b></div><div><small>Round puanı</small><b class="rp-pts">0</b></div></div><div class="rp-bonus"></div></div>`).join('');
+  const banner = $('#win-banner'); banner.className = 'win-banner'; banner.textContent = '';
+  $('#reveal-actions').classList.remove('show');
+  $('#btn-rv-next').textContent = Flow.nextLabel();
+  UI.show('scr-reveal');
+  await sleep(60); if (!alive()) return;
+  RevealMap.ensure();
+  const map = RevealMap.map, layer = RevealMap.layer, T = [m.target.lat, m.target.lng];
+  await sleep(500); if (!alive()) return;
+  Sound.whoosh(); map.flyTo(T, 6, { duration: 1.8 });
+  await sleep(1950); if (!alive()) return;
+  L.marker(T, { icon: targetIcon(), zIndexOffset: 1000, keyboard: false }).addTo(layer);
+  Sound.ding(); lc.classList.add('show');
+  await sleep(800); if (!alive()) return;
+  const pins = m.players.map((pid, i) => ({ pid, i, r: m.results[pid] })).filter(x => x.r && x.r.guess);
+  if (pins.length) {
+    map.flyToBounds(L.latLngBounds([T, ...pins.map(p => [p.r.guess.lat, p.r.guess.lng])]), { padding: [90, 90], maxZoom: 15, duration: 1.6 });
+    await sleep(1750); if (!alive()) return;
+    pins.forEach(p => L.marker([p.r.guess.lat, p.r.guess.lng], { icon: pinIcon(PLAYER_COLORS[p.i], initial(nameOf(p.pid))), keyboard: false }).addTo(layer));
+    Sound.pop(); await sleep(350);
+    const lines = pins.map(p => ({ p, line: L.polyline([[p.r.guess.lat, p.r.guess.lng], [p.r.guess.lat, p.r.guess.lng]], { color: PLAYER_COLORS[p.i], weight: 4, dashArray: '10 12', opacity: .95 }).addTo(layer) }));
+    await tween(1300, t => lines.forEach(({ p, line }) => {
+      const a = p.r.guess; line.setLatLngs([[a.lat, a.lng], [a.lat + (m.target.lat - a.lat) * t, a.lng + (m.target.lng - a.lng) * t]]);
+    }));
+    if (!alive()) return;
+  }
+  await Promise.all(m.players.map(pid => {
+    const r = m.results[pid], card = $(`.rp[data-pid="${pid}"]`); if (!card || !r) return null;
+    const dEl = card.querySelector('.rp-dist'), pEl = card.querySelector('.rp-pts');
+    const jobs = [animateValue(pEl, r.points, { dur: 1400 })];
+    if (r.distKm == null) dEl.textContent = 'Tahmin yok';
+    else jobs.push(animateValue(dEl, r.distKm, { dur: 1400, fmt: fmtDist }));
+    return Promise.all(jobs);
+  }));
+  if (!alive()) return;
+  m.players.forEach(pid => {
+    const r = m.results[pid], card = $(`.rp[data-pid="${pid}"]`); if (!card || !r) return;
+    card.querySelector('.rp-bonus').innerHTML = r.bonus ? `<em>+${fmtPts(r.bonus)}</em> düello bonusu → toplam <b>${fmtPts(r.total)}</b>` : `Toplam <b>${fmtPts(r.total)}</b>`;
+    if (r.win) card.classList.add('winner');
+  });
+  const winners = m.players.filter(pid => m.results[pid] && m.results[pid].win);
+  if (!winners.length) { banner.textContent = '😅 Kimse tahmin etmedi!'; banner.classList.add('neutral'); Sound.error(); }
+  else if (winners.length > 1) { banner.textContent = '🤝 Berabere! Bonus paylaşıldı'; Sound.victory(); bigConfetti(1500); }
+  else { banner.textContent = `🏆 ${nameOf(winners[0])} kazandı!`; Sound.victory(); bigConfetti(); }
+  banner.classList.add('show');
+  $('#reveal-actions').classList.add('show'); Flow.revealDone = true;
+}
+
+/* =====================================================================
+   SCREENS — her fazın ekranı
+   ===================================================================== */
+const Screens = {
+  SPLASH() { UI.show('scr-splash'); $('#btn-resume').hidden = !gameInProgress(); },
+  SETUP() {
+    UI.show('scr-setup');
+    const ta = $('#players-ta');
+    ta.value = game.draftText || game.players.map(p => p.name).join('\n');
+    if (!game.oddMode) game.oddMode = settings.oddMode;
+    SetupView.update(); setTimeout(() => ta.focus(), 100);
+  },
+  DRAW(opt) {
+    UI.show('scr-draw');
+    if (!game.draw || opt.fresh) { game.draw = Pairing.build(game.players, game.oddMode); save(); setTimeout(() => DrawView.run(), 80); }
+    else { DrawView.token++; DrawView.animating = false; DrawView.sub(); DrawView.renderCards(); DrawView.setButtons(true); }
+  },
+  ROUND_INTRO(opt) {
+    const m = Flow.match(); if (!m) return Flow.go('SPLASH');
+    const others = m.players.slice(1).map(nameOf), first = nameOf(m.players[0]);
+    const warn = others.length > 1
+      ? `${others.map(esc).join(' ve ')}, lütfen arkanızı dönün / salondan çıkın 👀`
+      : `${esc(others[0])}, lütfen arkanı dön / salondan çık 👀`;
+    const vs = m.players.map((pid, i) => `<div class="vs-name p${i + 1}" style="--d:${i * .15}s">${esc(nameOf(pid))}</div>`).join('<div class="vs-x">VS</div>');
+    $('#scr-intro').innerHTML = `
+      <div class="silence">🤫 Sessizlik! İpucu vermek yok 🤫</div>
+      <div class="eyebrow" style="margin-top:2.4rem">${m.isFinal ? '👑 Büyük final — en yüksek puanlı iki oyuncu' : 'Sıradaki düello'}</div>
+      <h1 class="title-xl" style="margin-top:.3rem">${esc(Flow.roundLabel(m))}</h1>
+      <div class="vs-wrap ${m.players.length > 2 ? 'trio' : ''}">${vs}</div>
+      <div class="turn-warn">${warn}</div>
+      <button class="btn lg" id="btn-intro-next" style="margin-top:1.6rem">▶ ${esc(first)} başlasın</button>
+      <div class="hint"><kbd>SPACE</kbd> ile devam</div>`;
+    UI.show('scr-intro');
+    $('#btn-intro-next').onclick = () => Flow.go('READY');
+    if (!opt.quiet) { Sound.whoosh(); setTimeout(() => Sound.gong(), 550); }
+  },
+  READY() {
+    const m = Flow.match(), pid = Flow.pid(); if (!m || !pid) return Flow.go('SPLASH');
+    const col = Flow.color(), name = nameOf(pid);
+    $('#scr-ready').innerHTML = `
+      <div class="ready-avatar" style="--pc:${col}">${esc(initial(name))}</div>
+      <div class="eyebrow" style="margin-top:1.6rem">${esc(Flow.roundLabel(m))} • Oyuncu ${game.turn + 1} / ${m.players.length}</div>
+      <h1 class="title-l"><span style="color:${col}">${esc(name)}</span> hazır mı?</h1>
+      <div class="ready-rules">🔭 ${settings.exploreSeconds} sn keşif &nbsp;•&nbsp; 📍 ${settings.guessSeconds > 0 ? settings.guessSeconds + ' sn tahmin' : 'sınırsız tahmin'} &nbsp;•&nbsp; 🚶 ${settings.moveRadiusMeters} m hareket</div>
+      <div class="ready-status" id="ready-status">⏳ Konum hazırlanıyor…</div>
+      <button class="btn xl" id="btn-start" disabled>▶ BAŞLAT</button>
+      <div class="hint"><kbd>SPACE</kbd> ile başlat</div>`;
+    UI.show('scr-ready');
+    $('#btn-start').onclick = () => Flow.beginTurn();
+    Flow.prepare().then(ok => {
+      if (game.phase !== 'READY' || Flow.match() !== m) return;
+      const st = $('#ready-status'); if (!st) return;
+      if (ok) { st.innerHTML = '✅ Konum hazır'; $('#btn-start').disabled = false; }
+      else Screens.readyFail();
+    });
+  },
+  readyFail() {
+    const st = $('#ready-status'); if (!st) return;
+    const reason = MapsLoader.state !== 'ready' ? 'Google Maps yüklü değil.' : (locById(Flow.match().locationId) ? 'Bu konumda Street View panoraması bulunamadı.' : 'Bu round\'a konum atanmamış.');
+    st.innerHTML = `<span style="color:var(--red);font-weight:800">❌ ${reason}</span>
+      <div class="row"><button class="btn ghost" data-a="retry">🔁 Tekrar dene</button><button class="btn" data-a="backup">⏭ Konumu atla / yedek konum ver</button><button class="btn ghost" data-a="admin">⚙️ Elle seç</button></div>`;
+    st.querySelector('[data-a=retry]').onclick = () => { if (MapsLoader.state !== 'ready') return location.reload(); Flow._prep = null; Screens.READY(); };
+    st.querySelector('[data-a=backup]').onclick = () => Flow.backupLocation();
+    st.querySelector('[data-a=admin]').onclick = () => Admin.show('rounds');
+    Sound.error();
+  },
+  EXPLORE() {
+    const m = Flow.match(), col = Flow.color();
+    const scr = $('#scr-play');
+    UI.show('scr-play'); scr.classList.remove('guessing', 'urgent'); scr.style.setProperty('--pc', col);
+    $('#hud-round').textContent = Flow.roundLabel(m);
+    $('#hud-name').textContent = nameOf(Flow.pid());
+    GuessMap.ensure(); GuessMap.reset(col); GuessMap.setMode('mini');
+    SV.show(m); HUD.move(0);
+    Flow.exploreElapsed = 0; Flow.pinInfo = null;
+    Flow.startTimer(settings.exploreSeconds, 'KEŞİF', () => { Flow.exploreElapsed = Flow.timer ? Flow.timer.elapsed : settings.exploreSeconds * 1000; Flow.go('GUESS'); });
+    Sound.start();
+  },
+  GUESS() {
+    const scr = $('#scr-play');
+    if (!scr.classList.contains('active')) return Flow.go('READY');
+    scr.classList.add('guessing');
+    GuessMap.setMode('full'); Sound.whoosh();
+    if (settings.guessSeconds > 0) Flow.startTimer(settings.guessSeconds, 'TAHMİN', () => Flow.submit(true));
+    else { Flow.stopTimer(); Flow.guessStartedAt = performance.now(); HUD.timer(0, 0, 'TAHMİN', true); }
+  },
+  HANDOFF() {
+    const m = Flow.match(); if (!m) return Flow.go('SPLASH');
+    const prev = nameOf(m.players[game.turn - 1]), cur = nameOf(Flow.pid());
+    $('#scr-handoff').innerHTML = `
+      <div class="big-emoji">🙈</div>
+      <div class="handoff-line"><span style="color:${Flow.color(game.turn - 1)}">${esc(prev)}</span>, gözlerini kapat 🙈</div>
+      <div class="handoff-line">— <span style="color:${Flow.color()}">${esc(cur)}</span>, sıra sende! 🎯</div>
+      <div class="handoff-sub">Tahmin kaydedildi. Sonuçlar herkes oynadıktan sonra açıklanacak.</div>
+      <button class="btn lg" id="btn-handoff" style="margin-top:2rem">▶ ${esc(cur)} hazır</button>
+      <div class="hint"><kbd>SPACE</kbd> ile devam</div>`;
+    UI.show('scr-handoff');
+    $('#btn-handoff').onclick = () => Flow.go('READY');
+  },
+  REVEAL() { runReveal(); },
+  LEADERBOARD() {
+    UI.show('scr-leader');
+    const done = regularMatches().filter(m => m.status === 'done').length;
+    $('#lb-sub').textContent = `${done} / ${regularMatches().length} round tamamlandı`;
+    $('#btn-lb-next').textContent = Flow.nextLabel();
+    Leaderboard.render($('#lb-page'));
+  },
+  FINAL() {
+    const tk = ++Flow.revealToken; Flow.podiumDone = false;
+    const top = Scoring.podium(), fm = game.matches.find(m => m.isFinal && m.status === 'done');
+    const pod = (p, cls, medal, place) => p ? `<div class="pod ${cls}" data-place="${place}"><div class="pod-medal">${medal}</div><div class="pod-name">${esc(p.name)}</div><div class="pod-pts">${fmtPts(p.total)} puan${p.final != null ? ` • Final: ${fmtPts(p.final)}` : ''}</div><div class="pod-block">${place}</div></div>` : '';
+    $('#scr-final').innerHTML = `<div class="eyebrow">${fm ? 'Final düellosu sonrası' : 'Oyun bitti'}</div><h1 class="title-l" style="margin:.2rem 0">🏆 Şampiyonlar Kürsüsü</h1>
+      <div class="podium">${pod(top[1], 'second', '🥈', 2)}${pod(top[0], 'first', '👑', 1)}${pod(top[2], 'third', '🥉', 3)}</div>
+      ${top.length ? '' : '<p class="muted">Henüz oynanmış round yok.</p>'}
+      <div class="final-actions row" id="final-actions" style="justify-content:center"><button class="btn ghost lg" id="btn-fin-lb">🏆 Tam Tablo</button><button class="btn lg gold" id="btn-fin-awards">🎖️ Eğlenceli Ödüller</button></div>`;
+    UI.show('scr-final');
+    $('#btn-fin-lb').onclick = () => LeaderOverlay.show();
+    $('#btn-fin-awards').onclick = () => Flow.go('AWARDS');
+    (async () => {
+      for (const [place, wait] of [[3, 900], [2, 1500], [1, 2000]]) {
+        await sleep(wait); if (tk !== Flow.revealToken) return;
+        const p = $(`#scr-final .pod[data-place="${place}"]`); if (!p) continue;
+        p.classList.add('show');
+        if (place === 1) { Sound.victory(); bigConfetti(3500); }
+        else { Sound.ding(); confettiBurst({ particleCount: 60, origin: { x: place === 2 ? .3 : .7, y: .6 } }); }
+      }
+      await sleep(1200); if (tk !== Flow.revealToken) return;
+      $('#final-actions').classList.add('show'); Flow.podiumDone = true;
+    })();
+  },
+  AWARDS() {
+    const tk = ++Flow.revealToken, aw = Scoring.awards();
+    $('#scr-awards').innerHTML = `<div class="eyebrow">Herkes bir şey kazanır… belki</div><h1 class="title-l" style="margin:.2rem 0">🎖️ Eğlenceli Ödüller</h1>
+      <div class="awards">${aw.map(a => `<div class="award"><div class="face front glass"><div class="aw-emoji">${a.emoji}</div><div class="aw-title">${esc(a.title)}</div><div class="aw-sub">${esc(a.sub)}</div><div class="aw-name">${esc(a.name)}</div><div class="aw-detail">${esc(a.detail)}</div></div><div class="face back">❔</div></div>`).join('')}</div>
+      <div class="row" style="justify-content:center"><button class="btn ghost lg" id="btn-aw-podium">← Kürsü</button><button class="btn ghost lg" id="btn-aw-lb">🏆 Lider Tablosu</button><button class="btn lg" id="btn-aw-new">🆕 Yeni Oyun</button></div>`;
+    UI.show('scr-awards');
+    $('#btn-aw-podium').onclick = () => Flow.go('FINAL');
+    $('#btn-aw-lb').onclick = () => LeaderOverlay.show();
+    $('#btn-aw-new').onclick = () => Flow.newGameAsk();
+    $$('#scr-awards .award').forEach((c, i) => setTimeout(() => {
+      if (tk !== Flow.revealToken) return;
+      c.classList.add('flip'); Sound.ding();
+      confettiBurst({ particleCount: 40, spread: 50, origin: { x: (i + .5) / 5, y: .5 } });
+    }, 700 + i * 1100));
+  },
+};
+
+/* =====================================================================
+   FLOW — state machine
+   ===================================================================== */
+const Flow = {
+  timer: null, timerLabel: '', exploreElapsed: 0, guessStartedAt: 0, pinInfo: null,
+  revealToken: 0, revealDone: false, podiumDone: false,
+  _prep: null, _holds: 0, _held: false, _panoErr: false, _starting: false,
+
+  go(phase, opt) {
+    game.phase = phase; save();
+    if (phase !== 'EXPLORE' && phase !== 'GUESS') $('#pause').classList.remove('show');
+    const fn = Screens[phase]; if (fn) fn(opt || {});
+    UI.updateTopbar();
+  },
+  match() { return game.matches[game.matchIdx] || null; },
+  pid() { const m = this.match(); return m ? m.players[game.turn] : null; },
+  color(i = game.turn) { return PLAYER_COLORS[i] || PLAYER_COLORS[0]; },
+  isPlaying() { return game.phase === 'EXPLORE' || game.phase === 'GUESS'; },
+  canPin() { return this.isPlaying() && !(this.timer && this.timer.paused); },
+  roundLabel(m = this.match()) { if (!m) return ''; return m.isFinal ? 'FİNAL DÜELLOSU' : `ROUND ${m.no} / ${regularMatches().length}`; },
+  nextLabel() {
+    if (game.matches.some(m => m.status !== 'done')) return '▶ Sonraki Round';
+    if (settings.finalDuel && !game.finalCreated && Scoring.standings().filter(r => r.played).length >= 2) return '👑 Final Düellosu';
+    return '🏁 Final Sonuçları';
+  },
+
+  // Space tuşu: başlat / sonraki adım
+  advance() {
+    switch (game.phase) {
+      case 'SPLASH': $('#btn-setup').click(); break;
+      case 'DRAW': if (!DrawView.animating) this.startGame(); break;
+      case 'ROUND_INTRO': this.go('READY'); break;
+      case 'READY': this.beginTurn(); break;
+      case 'HANDOFF': this.go('READY'); break;
+      case 'REVEAL': if (this.revealDone) this.nextRound(); break;
+      case 'LEADERBOARD': this.nextRound(); break;
+      case 'FINAL': if (this.podiumDone) this.go('AWARDS'); break;
+    }
+  },
+
+  startGame() {
+    const d = game.draw; if (!d || !d.pairs.length) return;
+    const active = locations.filter(l => l.active).length;
+    if (active < d.pairs.length) { UI.alert(`${d.pairs.length} round için ${d.pairs.length} konum gerekli ama ${active} aktif konum var. Yönetim panelinden konum ekle veya aktif et.`, '📍 Yetersiz konum'); return; }
+    game.matches = d.pairs.map((p, i) => ({ id: uid(), no: i + 1, players: p.slice(), locationId: null, isFinal: false, status: 'pending', results: {}, pano: null, target: null, pov: null }));
+    game.byeId = d.bye || null; game.finalCreated = false; game.lbPrevOrder = null; game.lastDoneMatchId = null;
+    Pairing.assignLocations(game.matches, settings.assignMode);
+    if (settings.finalDuel && active < d.pairs.length + 1) UI.toast('⚠️ Final düellosu için kullanılmamış konum kalmadı — bir konum tekrar kullanılabilir', 'warn', 5000);
+    if (settings.assignMode === 'manual') UI.toast('📍 Konumları Yönetim → Round–Konum sekmesinden seçebilirsin (şimdilik sıralı atandı)', 'info', 5000);
+    this.enterMatch(0);
+  },
+  enterMatch(idx) {
+    const m = game.matches[idx]; m.results = {}; m.status = 'pending';
+    game.matchIdx = idx; game.turn = 0; this._prep = null;
+    this.go('ROUND_INTRO');
+  },
+
+  // Panoramayı round başında bir kez bul; tüm oyuncular aynı panorama + aynı bakış yönüyle başlar
+  prepare() {
+    const m = this.match(); if (!m) return Promise.resolve(false);
+    if (m.pano && m.target && m.pov) return Promise.resolve(true);
+    const key = m.id + ':' + m.locationId;
+    if (this._prep && this._prep.key === key) return this._prep.p;
+    const p = (async () => {
+      const loc = locById(m.locationId); if (!loc) return false;
+      if (MapsLoader.state !== 'ready' && !(SV.mode === 'embed' && loc.panoId)) return false;
+      const r = await SV.resolve(loc);
+      if (!r) { loc.coverage = false; loc.coverageNote = 'Oyun sırasında panorama bulunamadı'; save(); return false; }
+      if (m.locationId !== loc.id) return false;
+      m.pano = { id: r.panoId, lat: r.lat, lng: r.lng, widened: r.widened };
+      m.target = { lat: r.lat, lng: r.lng };
+      m.pov = { heading: typeof loc.heading === 'number' ? loc.heading : Math.round(Math.random() * 360), pitch: typeof loc.pitch === 'number' ? loc.pitch : 0 };
+      save(); return true;
+    })();
+    this._prep = { key, p };
+    p.then(ok => { if (!ok && this._prep && this._prep.key === key) this._prep = null; });
+    return p;
+  },
+  async beginTurn() {
+    if (game.phase !== 'READY' || this._starting) return;
+    this._starting = true;
+    try {
+      const ok = await this.prepare();
+      if (!ok || game.phase !== 'READY') return;
+      const m = this.match(); m.status = 'playing'; delete m.results[this.pid()];
+      this.go('EXPLORE');
+    } finally { this._starting = false; }
+  },
+
+  startTimer(sec, label, onEnd) {
+    this.stopTimer();
+    const t = new Countdown(sec, {
+      onTick: tt => HUD.timer(tt.remaining, tt.total, label),
+      onSecond: s => { if (s <= 5 && s > 0) Sound.tick(); },
+      onEnd,
+    });
+    this.timer = t; this.timerLabel = label;
+    HUD.timer(t.remaining, t.total, label); t.start();
+  },
+  stopTimer() { if (this.timer) this.timer.stop(); this.timer = null; this._held = false; $('#pause').classList.remove('show'); },
+  hold() { if (this._holds++ === 0 && this.timer && this.timer.running && !this.timer.paused) { this.timer.pause(); this._held = true; } },
+  release() { if (this._holds > 0 && --this._holds === 0 && this._held) { if (this.timer) this.timer.resume(); this._held = false; } },
+  togglePause() {
+    const t = this.timer;
+    if (!t || !t.running) { UI.toast('Duraklatılacak aktif zamanlayıcı yok'); return; }
+    if (t.paused) { t.resume(); this._held = false; $('#pause').classList.remove('show'); }
+    else { t.pause(); $('#pause').classList.add('show'); }
+  },
+  addTime() {
+    const t = this.timer;
+    if (!t || !t.running) { UI.toast('Süre eklenecek aktif zamanlayıcı yok'); return; }
+    t.add(10000); HUD.timer(t.remaining, t.total, this.timerLabel); UI.toast('⏱️ +10 sn', 'ok'); Sound.ding();
+  },
+  onPin() { this.pinInfo = { phase: game.phase, remaining: this.timer ? this.timer.remaining : Infinity }; },
+
+  // Tahmini kaydet — ASLA gösterme; sonraki oyuncuya devret veya sonuca geç
+  submit(auto = false) {
+    if (!this.isPlaying()) return;
+    const m = this.match(), pid = this.pid(), phase = game.phase, t = this.timer;
+    const g = GuessMap.getGuess();
+    let elapsed;
+    if (phase === 'EXPLORE') elapsed = t ? t.elapsed : 0;
+    else elapsed = this.exploreElapsed + (t ? t.elapsed : (performance.now() - this.guessStartedAt));
+    const remaining = t ? t.remaining : null;
+    const win = settings.lastSecondWindow * 1000;
+    let lastSecond = false;
+    if (g) {
+      if (auto) lastSecond = !!(this.pinInfo && this.pinInfo.phase === 'GUESS' && this.pinInfo.remaining <= win);
+      else lastSecond = remaining != null && remaining <= win;
+    }
+    m.results[pid] = { guess: g, timeMs: Math.round(elapsed), remainingMs: remaining != null ? Math.round(auto && this.pinInfo ? this.pinInfo.remaining : remaining) : null, lastSecond, auto: auto || !g, phase };
+    this.stopTimer(); SV.hide(); GuessMap.clear(); Sound.whoosh();
+    $('#scr-play').classList.remove('urgent');
+    if (game.turn < m.players.length - 1) { game.turn++; this.go('HANDOFF'); }
+    else { Scoring.finalize(m); this.go('REVEAL'); }
+  },
+
+  nextRound() {
+    LeaderOverlay.close();
+    const idx = game.matches.findIndex(m => m.status !== 'done');
+    if (idx >= 0) return this.enterMatch(idx);
+    if (settings.finalDuel && !game.finalCreated && this.createFinal()) return this.enterMatch(game.matches.length - 1);
+    this.go('FINAL');
+  },
+  createFinal() {
+    const st = Scoring.standings().filter(r => r.played);
+    if (st.length < 2) return false;
+    const used = new Set(game.matches.map(m => m.locationId));
+    let loc = locById(settings.finalLocationId);
+    if (!loc || !loc.active || used.has(loc.id)) {
+      const free = locations.filter(l => l.active && !used.has(l.id) && l.coverage !== false);
+      loc = free.find(l => l.difficulty === 'Zor') || free[0] || shuffle(locations.filter(l => l.active))[0];
+    }
+    if (!loc) { UI.alert('Final düellosu için aktif konum yok.'); return false; }
+    game.matches.push({ id: uid(), no: 'F', players: [st[0].pid, st[1].pid], locationId: loc.id, isFinal: true, status: 'pending', results: {}, pano: null, target: null, pov: null });
+    game.finalCreated = true;
+    return true;
+  },
+
+  async restartTurnAsk() {
+    if (!['READY', 'EXPLORE', 'GUESS'].includes(game.phase)) { UI.toast('Yeniden başlatılacak aktif bir tur yok'); return; }
+    this.hold();
+    const ok = await UI.confirm(`<b>${esc(nameOf(this.pid()))}</b> adlı oyuncunun turu baştan başlatılsın mı?`, { ok: '↺ Yeniden başlat' });
+    this.release();
+    if (ok) this.restartTurn();
+  },
+  restartTurn() {
+    this.stopTimer(); SV.hide(); GuessMap.clear();
+    const m = this.match(); if (m) delete m.results[this.pid()];
+    UI.toast('↺ Tur yeniden başlatıldı'); this.go('READY');
+  },
+  async panoError() {
+    if (!this.isPlaying() || this._panoErr) return;
+    this._panoErr = true; this.hold();
+    const v = await UI.modal({ title: '❌ Panorama yüklenemedi', html: '<p>Street View görüntüsü yüklenemedi. Ne yapalım?</p>', dismissable: false,
+      buttons: [{ label: 'Görmezden gel', value: 'close' }, { label: '🔁 Turu yeniden başlat', value: 'retry' }, { label: '⏭ Yedek konum ver', value: 'backup', primary: true }] });
+    this._panoErr = false; this.release();
+    if (v === 'retry') { const m = this.match(); m.pano = null; m.target = null; m.pov = null; this._prep = null; this.restartTurn(); }
+    else if (v === 'backup') this.backupLocation();
+  },
+  backupLocation() {
+    const m = this.match(); if (!m) return;
+    const cur = locById(m.locationId);
+    if (cur && MapsLoader.state === 'ready') cur.coverage = false;
+    const cands = Pairing.unusedLocations(m).filter(l => l.id !== m.locationId && l.coverage !== false);
+    if (!cands.length) { UI.alert('Kullanılmamış yedek konum kalmadı. Yönetim panelinden konum ekle.', '📍 Yedek konum yok'); return; }
+    const same = cur ? cands.filter(l => l.difficulty === cur.difficulty) : [];
+    const pick = (same.length ? same : cands)[0];
+    UI.toast(`⏭ Yedek konum atandı`, 'ok');
+    this.changeLocation(m, pick.id);
+  },
+  changeLocation(m, locId) {
+    m.locationId = locId; m.pano = null; m.target = null; m.pov = null; this._prep = null;
+    const isCur = m === this.match() && ['ROUND_INTRO', 'READY', 'EXPLORE', 'GUESS', 'HANDOFF'].includes(game.phase);
+    if (!isCur) { save(); return; }
+    this.stopTimer(); SV.hide(); GuessMap.clear();
+    if (Object.keys(m.results).length || game.turn > 0) {
+      m.results = {}; m.status = 'pending'; game.turn = 0;
+      UI.toast('📍 Konum değişti — round baştan başlıyor', 'warn', 4000);
+      this.go('ROUND_INTRO', { quiet: true });
+    } else if (game.phase !== 'ROUND_INTRO') { m.status = 'pending'; this.go('READY'); }
+    else save();
+  },
+  replayMatch(m) {
+    this.stopTimer(); SV.hide(); GuessMap.clear();
+    const cur = this.match();
+    if (cur && cur !== m && cur.status === 'playing') { cur.results = {}; cur.status = 'pending'; }
+    if (game.lastDoneMatchId === m.id) game.lastDoneMatchId = null;
+    this.enterMatch(game.matches.indexOf(m));
+  },
+  resume() {
+    const p = game.phase;
+    if (!game.players.length || !Screens[p]) return this.go('SPLASH');
+    if (p === 'EXPLORE' || p === 'GUESS') {
+      const m = this.match(); if (m) delete m.results[this.pid()];
+      UI.toast('Yarıda kalan tur baştan başlayacak', 'warn', 4000);
+      return this.go('READY');
+    }
+    this.go(p);
+  },
+  resetGame() {
+    this.stopTimer(); SV.hide(); LeaderOverlay.close();
+    const names = game.players.map(p => p.name).join('\n') || game.draftText || '';
+    game = newGame(); game.draftText = names; save();
+  },
+  async newGameAsk() {
+    if (!await UI.confirm('Mevcut oyun (oyuncular, eşleşmeler, sonuçlar) silinecek. Konum havuzu ve ayarlar korunur. Yeni oyun başlatılsın mı?', { danger: true, ok: '🆕 Yeni Oyun' })) return;
+    this.resetGame(); if (Admin.open) Admin.close(); this.go('SETUP');
+  },
+  // Admin değişikliklerinden sonra statik ekranları tazele
+  refresh() {
+    if (game.phase === 'READY') Screens.READY();
+    else if (game.phase === 'LEADERBOARD') Screens.LEADERBOARD();
+    else if (game.phase === 'ROUND_INTRO') Screens.ROUND_INTRO({ quiet: true });
+    else if (game.phase === 'HANDOFF') Screens.HANDOFF();
+    else if (game.phase === 'DRAW' && !DrawView.animating && game.draw) DrawView.renderCards();
+  },
+};
+
+/* =====================================================================
+   ADMIN PANELİ
+   ===================================================================== */
+const SETTING_FIELDS = [
+  { k: 'exploreSeconds', label: 'Keşif süresi (sn)', type: 'number', min: 5, max: 600 },
+  { k: 'guessSeconds', label: 'Tahmin ek süresi (sn)', hint: '0 = sınırsız', type: 'number', min: 0, max: 600 },
+  { k: 'moveRadiusMeters', label: 'Hareket yarıçapı (m)', hint: '0 = yerinden kıpırdama', type: 'number', min: 0, max: 5000 },
+  { k: 'panoSearchRadius', label: 'Panorama arama yarıçapı (m)', type: 'number', min: 10, max: 1000 },
+  { k: 'fallbackSearchRadius', label: 'Yedek arama yarıçapı (m)', hint: 'İlk aramada panorama yoksa; 0 = kapalı', type: 'number', min: 0, max: 5000 },
+  { k: 'scoreMax', label: 'Maksimum puan', type: 'number', min: 100, max: 100000 },
+  { k: 'scoreScaleKm', label: 'Puan ölçeği (km)', hint: 'puan = max · e^(−mesafe/ölçek)', type: 'number', min: 1, max: 20000 },
+  { k: 'perfectMeters', label: 'Tam puan eşiği (m)', type: 'number', min: 0, max: 10000 },
+  { k: 'winBonus', label: 'Düello kazanma bonusu', type: 'number', min: 0, max: 100000 },
+  { k: 'tieMeters', label: 'Beraberlik toleransı (m)', type: 'number', min: 0, max: 1000 },
+  { k: 'lastSecondWindow', label: '"Son Saniyeci" penceresi (sn)', type: 'number', min: 1, max: 10 },
+  { k: 'oddMode', label: 'Tek sayı modu (varsayılan)', type: 'select', options: [['trio', 'Son round 3 kişilik'], ['bye', '1 kişi bay geçer']] },
+  { k: 'assignMode', label: 'Konum atama modu', type: 'select', options: [['sequential', 'Sıralı'], ['random', 'Rastgele'], ['manual', 'Elle']] },
+  { k: 'finalDuel', label: '👑 Final düellosu (ilk 2 oyuncu)', type: 'checkbox' },
+  { k: 'soundEnabled', label: '🔊 Ses efektleri', type: 'checkbox' },
+];
+const num = v => parseFloat(String(v ?? '').trim().replace(',', '.'));
+const covIcon = c => c === true ? '✅' : c === 'near' ? '⚠️' : c === false ? '❌' : c === 'testing' ? '⏳' : '❔';
+const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+function download(name, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+// Google Maps URL'si veya "lat, lng" metninden konum çıkar
+// Örn: https://www.google.com/maps/@41.0256,28.9741,3a,75y,90h,95t/data=…  → heading 90, pitch 95-90 = 5
+function parseLocationInput(text) {
+  const s = String(text || '').trim(); if (!s) return null;
+  let lat, lng, heading = null, pitch = null, m;
+  if ((m = s.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:,([^/?#]*))?/))) {
+    lat = +m[1]; lng = +m[2];
+    const rest = m[3] || '';
+    const h = rest.match(/(?:^|,)(-?\d+(?:\.\d+)?)h(?=,|$)/), t = rest.match(/(?:^|,)(-?\d+(?:\.\d+)?)t(?=,|$)/);
+    if (h) heading = ((+h[1] % 360) + 360) % 360;
+    if (t) pitch = clamp(+t[1] - 90, -90, 90);
+  } else if ((m = s.match(/[?&](?:viewpoint|cbll|ll|q)=(-?\d+(?:\.\d+)?)(?:,|%2C)\s*(-?\d+(?:\.\d+)?)/i))) {
+    lat = +m[1]; lng = +m[2];
+    const h = s.match(/[?&]heading=(-?\d+(?:\.\d+)?)/), p = s.match(/[?&]pitch=(-?\d+(?:\.\d+)?)/);
+    if (h) heading = ((+h[1] % 360) + 360) % 360;
+    if (p) pitch = clamp(+p[1], -90, 90);
+  } else if ((m = s.match(/^(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)$/))) { lat = +m[1]; lng = +m[2]; }
+  else return null;
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  // Resmi Google araç panoraması ise (…!1s<panoId>!2e0…) pano ID'yi de al; kullanıcı fotoğrafları (!2e10) alınmaz
+  const pm = s.match(/!1s([A-Za-z0-9_-]{20,30})!2e0/);
+  return { lat, lng, heading, pitch, panoId: pm ? pm[1] : null };
+}
+function sanitizeLocations(arr) {
+  return arr.map(x => {
+    if (!x || typeof x !== 'object') return null;
+    const lat = num(x.lat), lng = num(x.lng);
+    if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    const h = num(x.heading), p = num(x.pitch);
+    return {
+      id: x.id ? String(x.id) : uid(), label: String(x.label || x.name || ''), country: String(x.country || ''),
+      countryCode: String(x.countryCode || '').toLowerCase().slice(0, 2), city: String(x.city || ''), desc: String(x.desc || x.description || ''),
+      difficulty: ['Kolay', 'Orta', 'Zor'].includes(x.difficulty) ? x.difficulty : 'Orta',
+      lat, lng, heading: isFinite(h) ? h : null, pitch: isFinite(p) ? p : null, active: x.active !== false, coverage: null,
+      panoId: typeof x.panoId === 'string' && /^[A-Za-z0-9_-]{10,40}$/.test(x.panoId) ? x.panoId : null,
+      imageDate: x.imageDate ? String(x.imageDate) : '', playCount: +x.playCount || 0,
+    };
+  }).filter(Boolean);
+}
+
+const Admin = {
+  open: false, tab: 'locations', privacy: null, miniMap: null, miniMarker: null, dragId: null,
+  show(tab) {
+    if (tab) this.tab = tab;
+    if (!this.open) { this.open = true; Flow.hold(); if (this.privacy === null) this.privacy = gameInProgress(); }
+    $('#ov-admin').classList.add('show'); this.render();
+  },
+  close() {
+    if (!this.open) return;
+    this.open = false; this.destroyMiniMap();
+    $('#ov-admin').classList.remove('show'); $('#ov-admin').innerHTML = '';
+    Flow.release(); Flow.refresh();
+  },
+  toggle() { this.open ? this.close() : this.show(); },
+  destroyMiniMap() { if (this.miniMap) { this.miniMap.remove(); this.miniMap = null; this.miniMarker = null; } },
+  render() {
+    this.destroyMiniMap();
+    const tabs = [['locations', '📍 Konumlar'], ['rounds', '🗺️ Round–Konum'], ['settings', '🎛️ Ayarlar'], ['manage', '🧑‍⚖️ Round Yönetimi'], ['backup', '💾 Yedekleme']];
+    $('#ov-admin').innerHTML = `<div class="admin-panel ${this.privacy ? 'privacy' : ''}">
+      <div class="admin-head"><h2>⚙️ Yönetim</h2>
+        <div class="admin-tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${this.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <label class="row" style="gap:.4rem;cursor:pointer" title="Projeksiyonda konum adlarını bulanıklaştırır; satırın üzerine gelince görünür"><input type="checkbox" id="adm-priv" ${this.privacy ? 'checked' : ''}> 🙈 Konum adlarını gizle</label>
+        <button class="btn sm ghost" id="adm-close">✕ Kapat (Esc)</button></div>
+      <div class="admin-body" id="adm-body"></div></div>`;
+    $$('#ov-admin [data-tab]').forEach(b => b.onclick = () => { this.tab = b.dataset.tab; this.render(); });
+    $('#adm-close').onclick = () => this.close();
+    $('#adm-priv').onchange = e => { this.privacy = e.target.checked; $('#ov-admin .admin-panel').classList.toggle('privacy', this.privacy); };
+    this['tab_' + this.tab]();
+  },
+
+  /* ---------- Konumlar ---------- */
+  tab_locations() {
+    const act = locations.filter(l => l.active).length;
+    $('#adm-body').innerHTML = `
+      <div class="adm-add glass">
+        <div class="fields">
+          <h3>➕ Konum ekle</h3>
+          <label><b>1)</b> Google Maps Street View URL'si yapıştır<br><input type="text" id="add-url" style="width:100%" placeholder="https://www.google.com/maps/@41.0256,28.9741,3a,75y,90h,95t/data=…"></label>
+          <div class="muted"><b>2)</b> veya enlem/boylamı elle gir &nbsp;•&nbsp; <b>3)</b> veya sağdaki haritaya tıkla</div>
+          <div class="row"><input type="text" id="add-lat" placeholder="Enlem (lat)"><input type="text" id="add-lng" placeholder="Boylam (lng)"><input type="text" id="add-heading" placeholder="Yön ° (ops.)"><input type="text" id="add-pitch" placeholder="Eğim ° (ops.)"></div>
+          <div class="row"><input type="text" id="add-label" placeholder="Etiket (ops. — boşsa şehir adı)" style="flex:2"><select id="add-diff"><option>Kolay</option><option selected>Orta</option><option>Zor</option></select><button class="btn sm" id="add-btn">➕ Ekle ve test et</button></div>
+          <small class="muted">Ülke/şehir OpenStreetMap Nominatim ile otomatik doldurulur (✏️ ile düzenlenebilir). Street View kapsaması otomatik test edilir.</small>
+        </div>
+        <div id="adm-minimap" class="adm-minimap"></div>
+      </div>
+      <div class="adm-toolbar">
+        <button class="btn sm" id="adm-testall">🧪 Tümünü Test Et</button>
+        <button class="btn sm ghost" id="adm-seed">🌱 Hazır konumları geri yükle</button>
+        <span class="muted">Aktif: <b id="adm-actcount">${act}</b> / ${locations.length} &nbsp;•&nbsp; Kapsama: ✅ var ⚠️ yakında var ❌ yok ❔ test edilmedi &nbsp;•&nbsp; Satırları ⋮⋮ ile sürükleyip sırala</span>
+      </div>
+      <table class="adm-table"><thead><tr><th></th><th>#</th><th>Etiket</th><th>Ülke</th><th>Şehir</th><th>Zorluk</th><th>Aktif</th><th>Kapsama</th><th>Kullanım</th><th>İşlem</th></tr></thead><tbody id="loc-tbody"></tbody></table>`;
+    this.renderTable(); this.bindTable();
+    const url = $('#add-url');
+    url.addEventListener('input', () => {
+      const p = parseLocationInput(url.value); if (!p) return;
+      $('#add-lat').value = p.lat; $('#add-lng').value = p.lng;
+      $('#add-heading').value = p.heading ?? ''; $('#add-pitch').value = p.pitch ?? '';
+      this.pendingPano = p.panoId;
+      this.setMiniMarker(p.lat, p.lng, true);
+      UI.toast('🔗 Konum çözümlendi' + (p.heading != null ? ` (yön ${Math.round(p.heading)}°)` : ''), 'ok');
+    });
+    ['#add-lat', '#add-lng'].forEach(s => $(s).addEventListener('change', () => { const la = num($('#add-lat').value), ln = num($('#add-lng').value); if (isFinite(la) && isFinite(ln)) this.setMiniMarker(la, ln, true); }));
+    $('#add-btn').onclick = () => this.addFromForm();
+    $('#adm-testall').onclick = () => this.testAll();
+    $('#adm-seed').onclick = () => this.restoreSeeds();
+    setTimeout(() => this.initMiniMap(), 30);
+  },
+  initMiniMap() {
+    const el = $('#adm-minimap'); if (!el || !window.L || this.miniMap) return;
+    this.miniMap = L.map(el, { worldCopyJump: true, minZoom: 1 }).setView([30, 10], 1.5);
+    addTiles(this.miniMap);
+    this.miniMap.on('click', e => {
+      const ll = e.latlng.wrap();
+      $('#add-lat').value = ll.lat.toFixed(6); $('#add-lng').value = ll.lng.toFixed(6);
+      $('#add-heading').value = ''; $('#add-pitch').value = ''; this.pendingPano = null;
+      this.setMiniMarker(ll.lat, ll.lng, false);
+    });
+  },
+  setMiniMarker(lat, lng, fly) {
+    if (!this.miniMap) return;
+    if (this.miniMarker) this.miniMarker.setLatLng([lat, lng]);
+    else this.miniMarker = L.marker([lat, lng], { icon: pinIcon('#a78bfa') }).addTo(this.miniMap);
+    if (fly) this.miniMap.setView([lat, lng], 14);
+  },
+  async addFromForm() {
+    const lat = num($('#add-lat').value), lng = num($('#add-lng').value);
+    if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) { UI.toast('Geçerli bir enlem/boylam gir (veya URL yapıştır / haritaya tıkla)', 'err'); return; }
+    const h = num($('#add-heading').value), p = num($('#add-pitch').value);
+    const loc = { id: uid(), label: $('#add-label').value.trim(), country: '', countryCode: '', city: '', desc: '', difficulty: $('#add-diff').value, lat, lng, heading: isFinite(h) ? h : null, pitch: isFinite(p) ? p : null, panoId: this.pendingPano || null, active: true, coverage: null, playCount: 0 };
+    this.pendingPano = null;
+    locations.push(loc); save();
+    ['#add-url', '#add-lat', '#add-lng', '#add-heading', '#add-pitch', '#add-label'].forEach(s => { $(s).value = ''; });
+    this.renderTable(); UI.toast('➕ Konum eklendi — kapsama ve ülke bilgisi kontrol ediliyor…', 'ok');
+    await this.testLocation(loc);
+    await this.geocode(loc);
+  },
+  renderTable() {
+    const tb = $('#loc-tbody'); if (!tb) return;
+    const usage = new Map();
+    game.matches.forEach(m => { if (m.locationId) usage.set(m.locationId, (m.isFinal ? 'Final' : 'R' + m.no) + (m.status === 'done' ? ' ✓' : '')); });
+    tb.innerHTML = locations.map((l, i) => `<tr draggable="true" data-id="${esc(l.id)}">
+      <td class="drag" title="Sürükle">⋮⋮</td><td>${i + 1}</td>
+      <td class="sensitive">${flagHTML(l.countryCode)} <b>${esc(l.label || '(etiketsiz)')}</b></td>
+      <td class="sensitive">${esc(l.country || '—')}</td><td class="sensitive">${esc(l.city || '—')}</td>
+      <td><select data-act="diff">${['Kolay', 'Orta', 'Zor'].map(d => `<option ${l.difficulty === d ? 'selected' : ''}>${d}</option>`).join('')}</select></td>
+      <td><label class="switch"><input type="checkbox" data-act="active" ${l.active ? 'checked' : ''}><span></span></label></td>
+      <td class="cov" title="${esc(l.coverageNote || '')}">${covIcon(l.coverage)}</td>
+      <td>${usage.has(l.id) ? `<span class="pill live">${usage.get(l.id)}</span>` : ''}</td>
+      <td class="acts"><button data-act="preview" title="Önizle (Street View)">👁</button><button data-act="test" title="Kapsamayı test et">🧪</button><button data-act="edit" title="Düzenle">✏️</button><button data-act="del" title="Sil">🗑</button></td></tr>`).join('');
+    const c = $('#adm-actcount'); if (c) c.textContent = locations.filter(l => l.active).length;
+  },
+  bindTable() {
+    const tb = $('#loc-tbody');
+    tb.addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]'); if (!b) return;
+      const loc = locById(b.closest('tr').dataset.id); if (!loc) return;
+      ({ preview: () => this.preview(loc), test: () => this.testLocation(loc), edit: () => this.edit(loc), del: () => this.remove(loc) })[b.dataset.act]();
+    });
+    tb.addEventListener('change', e => {
+      const t = e.target, tr = t.closest('tr'), loc = tr && locById(tr.dataset.id); if (!loc) return;
+      if (t.dataset.act === 'diff') loc.difficulty = t.value;
+      if (t.dataset.act === 'active') loc.active = t.checked;
+      save(); const c = $('#adm-actcount'); if (c) c.textContent = locations.filter(l => l.active).length;
+    });
+    tb.addEventListener('dragstart', e => {
+      const tr = e.target.closest && e.target.closest('tr'); if (!tr) return;
+      this.dragId = tr.dataset.id; tr.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', tr.dataset.id);
+    });
+    tb.addEventListener('dragend', () => { $$('tr', tb).forEach(r => r.classList.remove('dragging', 'dropline')); this.dragId = null; });
+    tb.addEventListener('dragover', e => {
+      const tr = e.target.closest && e.target.closest('tr'); if (!tr || !this.dragId) return;
+      e.preventDefault(); $$('tr.dropline', tb).forEach(r => r !== tr && r.classList.remove('dropline')); tr.classList.add('dropline');
+    });
+    tb.addEventListener('drop', e => {
+      const tr = e.target.closest && e.target.closest('tr'); if (!tr || !this.dragId) return; e.preventDefault();
+      const from = locations.findIndex(l => l.id === this.dragId), to = locations.findIndex(l => l.id === tr.dataset.id);
+      this.dragId = null;
+      if (from < 0 || to < 0 || from === to) { this.renderTable(); return; }
+      const [it] = locations.splice(from, 1); locations.splice(to, 0, it);
+      save(); this.renderTable();
+    });
+  },
+  async testLocation(loc, quiet = false) {
+    if (MapsLoader.state !== 'ready') { if (!quiet) UI.toast('Google Maps yüklü değil — kapsama testi yapılamadı', 'warn'); return false; }
+    loc.coverage = 'testing'; this.renderTable();
+    const r = await SV.resolve(loc);
+    if (!r) { loc.coverage = false; loc.coverageNote = 'Resmi Google panoraması bulunamadı'; }
+    else {
+      const d = Math.round(haversineKm(loc, r) * 1000);
+      loc.coverage = r.widened ? 'near' : true;
+      loc.panoId = r.panoId; // key'siz (embed) modda da çalışsın
+      loc.coverageNote = r.widened ? `En yakın resmi panorama ~${d} m uzakta (yedek yarıçapla bulundu)` : `Panorama ${d} m içinde`;
+    }
+    save(); this.renderTable();
+    if (!quiet) UI.toast(r ? (r.widened ? '⚠️ Panorama biraz uzakta bulundu' : '✅ Street View kapsaması var') : '❌ Bu konumda Street View yok', r ? (r.widened ? 'warn' : 'ok') : 'err');
+    return !!r;
+  },
+  async testAll() {
+    if (MapsLoader.state !== 'ready') { UI.toast('Google Maps yüklü değil', 'warn'); return; }
+    const btn = $('#adm-testall'); if (btn) btn.disabled = true;
+    for (const l of locations.slice()) await this.testLocation(l, true);
+    const ok = locations.filter(l => l.coverage === true).length, near = locations.filter(l => l.coverage === 'near').length, bad = locations.filter(l => l.coverage === false).length;
+    const b2 = $('#adm-testall'); if (b2) b2.disabled = false;
+    UI.toast(`🧪 Test bitti: ✅ ${ok} • ⚠️ ${near} • ❌ ${bad}`, bad ? 'warn' : 'ok', 5000);
+  },
+  async geocode(loc) {
+    const r = await Geocoder.reverse(loc.lat, loc.lng);
+    if (!r) {
+      UI.toast('🌐 Ülke/şehir otomatik bulunamadı — ✏️ ile elle doldurabilirsin', 'warn', 4000);
+      if (!loc.label) loc.label = `Konum ${(+loc.lat).toFixed(3)}, ${(+loc.lng).toFixed(3)}`;
+      save(); this.renderTable(); return null;
+    }
+    if (!loc.country) loc.country = r.country;
+    if (!loc.countryCode) loc.countryCode = r.countryCode;
+    if (!loc.city) loc.city = r.city;
+    if (!loc.label) loc.label = r.city || r.country;
+    save(); this.renderTable(); return r;
+  },
+  async preview(loc) {
+    if (MapsLoader.state !== 'ready' && !loc.panoId) { UI.toast('Google Maps yüklü değil', 'warn'); return; }
+    const r = await SV.resolve(loc);
+    if (!r) { UI.alert('Bu konumda Street View panoraması bulunamadı ❌', '👁 Önizleme'); return; }
+    UI.modal({
+      title: `👁 Önizleme — <span class="${this.privacy ? 'muted' : ''}">${esc(loc.label || '')}</span>`, wide: true,
+      html: `<div id="prev-sv" class="prev-sv"></div><p class="muted" style="font-size:.8rem">${r.widened ? '⚠️ En yakın panorama yedek yarıçapla bulundu. ' : ''}Oyuncunun göreceği başlangıç görüntüsü (yön ${loc.heading ?? 'rastgele'}°).</p>`,
+      buttons: [{ label: 'Kapat', primary: true }],
+      onOpen: wrap => {
+        const pov = { heading: loc.heading ?? 0, pitch: loc.pitch ?? 0 };
+        if (SV.mode === 'embed') { wrap.querySelector('#prev-sv').innerHTML = `<iframe src="${SV.embedUrl(r.panoId, r.lat, r.lng, pov)}" style="width:100%;height:100%;border:0"></iframe>`; return; }
+        new google.maps.StreetViewPanorama(wrap.querySelector('#prev-sv'), Object.assign(SV.opts(), { pano: r.panoId, pov: { heading: loc.heading ?? 0, pitch: loc.pitch ?? 0 }, zoom: 1, visible: true })); },
+    });
+  },
+  edit(loc) {
+    const f = (k, label, extra = '') => `<label>${label}<input type="text" data-k="${k}" value="${esc(loc[k] ?? '')}" ${extra}></label>`;
+    UI.modal({
+      title: '✏️ Konumu düzenle', wide: true,
+      html: `<div class="form-grid">
+        ${f('label', 'Etiket / ad')}${f('country', 'Ülke')}${f('countryCode', 'Ülke kodu (2 harf — bayrak için, ör. tr)', 'maxlength="2"')}${f('city', 'Şehir')}
+        <label>Zorluk<select data-k="difficulty">${['Kolay', 'Orta', 'Zor'].map(d => `<option ${loc.difficulty === d ? 'selected' : ''}>${d}</option>`).join('')}</select></label>
+        ${f('lat', 'Enlem')}${f('lng', 'Boylam')}${f('heading', 'Başlangıç yönü (°) — boşsa rastgele')}${f('pitch', 'Başlangıç eğimi (°)')}
+      </div><label style="display:flex;flex-direction:column;margin-top:.8rem;font-weight:800;font-size:.8rem">Konum açıklaması (sonuç ekranında görünür)<textarea data-k="desc" rows="2">${esc(loc.desc || '')}</textarea></label>`,
+      buttons: [
+        { label: '🌐 Ülke/şehri otomatik doldur', onClick: async wrap => {
+          const q = k => wrap.querySelector(`[data-k="${k}"]`);
+          UI.toast('🌐 Nominatim sorgulanıyor…');
+          const r = await Geocoder.reverse(num(q('lat').value), num(q('lng').value));
+          if (r) { q('country').value = r.country; q('countryCode').value = r.countryCode; q('city').value = r.city; UI.toast('✅ Dolduruldu', 'ok'); }
+          else UI.toast('Bulunamadı — elle doldur', 'warn');
+          return false;
+        } },
+        { label: 'Vazgeç', value: false },
+        { label: '💾 Kaydet', primary: true, value: true, onClick: wrap => {
+          const get = k => wrap.querySelector(`[data-k="${k}"]`).value.trim();
+          const lat = num(get('lat')), lng = num(get('lng'));
+          if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) { UI.toast('Geçersiz koordinat', 'err'); return false; }
+          const moved = lat !== +loc.lat || lng !== +loc.lng;
+          const h = num(get('heading')), p = num(get('pitch'));
+          Object.assign(loc, { label: get('label'), country: get('country'), countryCode: get('countryCode').toLowerCase(), city: get('city'), difficulty: get('difficulty'), desc: get('desc'), lat, lng, heading: isFinite(h) ? h : null, pitch: isFinite(p) ? p : null });
+          // Bekleyen round'lar yeni koordinat/bakış yönünü kullansın
+          game.matches.filter(m => m.locationId === loc.id && m.status === 'pending').forEach(m => { m.pano = null; m.target = null; m.pov = null; });
+          Flow._prep = null;
+          if (moved) { loc.coverage = null; loc.panoId = null; }
+          save(); this.renderTable();
+          if (moved) this.testLocation(loc);
+        } },
+      ],
+    });
+  },
+  async remove(loc) {
+    const pending = game.matches.filter(m => m.locationId === loc.id && m.status !== 'done');
+    let msg = `<b>${esc(loc.label || 'Bu konum')}</b> silinsin mi?`;
+    if (pending.length) msg += `<br><br>⚠️ Bu konum ${pending.map(m => m.isFinal ? 'Final' : 'Round ' + m.no).join(', ')} için atanmış; silinirse yerine kullanılmamış bir yedek konum atanır.`;
+    if (!await UI.confirm(msg, { danger: true, ok: '🗑 Sil' })) return;
+    locations = locations.filter(l => l !== loc);
+    pending.forEach(m => { const c = Pairing.unusedLocations(m).find(l => l.coverage !== false); Flow.changeLocation(m, c ? c.id : null); });
+    save(); this.renderTable(); UI.toast('🗑 Konum silindi');
+  },
+  restoreSeeds() {
+    const have = new Set(locations.map(l => l.id));
+    const add = SEED_LOCATIONS.filter(s => !have.has(s.id)).map(s => ({ ...s }));
+    if (!add.length) { UI.toast('Tüm hazır konumlar zaten listede'); return; }
+    locations.push(...add); save(); this.render(); UI.toast(`🌱 ${add.length} hazır konum eklendi`, 'ok');
+  },
+
+  /* ---------- Round–Konum ---------- */
+  tab_rounds() {
+    const act = locations.filter(l => l.active);
+    const opts = m => {
+      const usedBy = new Map(); game.matches.forEach(x => { if (x !== m && x.locationId) usedBy.set(x.locationId, x.isFinal ? 'Final' : 'R' + x.no); });
+      const cur = locById(m.locationId);
+      const list = cur && !cur.active ? [cur, ...act] : act;
+      return '<option value="">— seçilmedi —</option>' + list.map(l => `<option value="${esc(l.id)}" ${m.locationId === l.id ? 'selected' : ''} ${usedBy.has(l.id) ? 'disabled' : ''}>${esc(l.label)} (${esc(l.city || l.country || '?')}) • ${l.difficulty}${usedBy.has(l.id) ? ' — ' + usedBy.get(l.id) + "'de" : ''}</option>`).join('');
+    };
+    const cur = Flow.match();
+    const status = m => m.status === 'done' ? '<span class="pill ok">Oynandı</span>' : (m === cur && gameInProgress() ? '<span class="pill live">Şu an</span>' : '<span class="pill wait">Bekliyor</span>');
+    $('#adm-body').innerHTML = `
+      <div class="sect glass"><h3>Atama ayarları</h3>
+        <div class="row">Atama modu:
+          <select id="adm-assign"><option value="sequential">Sıralı (konum listesi sırası)</option><option value="random">Rastgele</option><option value="manual">Elle (aşağıdan seç)</option></select>
+          <button class="btn sm" id="adm-reassign" ${game.matches.length ? '' : 'disabled'}>🔁 Bekleyen round'lara yeniden ata</button>
+        </div>
+        <div class="row" style="margin-top:.6rem">👑 Final düellosu konumu:
+          <select id="adm-finalloc" class="sensitive"><option value="">Otomatik (kullanılmamış, tercihen Zor)</option>${act.map(l => `<option value="${esc(l.id)}" ${settings.finalLocationId === l.id ? 'selected' : ''}>${esc(l.label)} (${esc(l.city || '')})</option>`).join('')}</select>
+          <span class="muted">Final düellosu şu an: <b>${settings.finalDuel ? 'Açık' : 'Kapalı'}</b> (Ayarlar sekmesi)</span>
+        </div>
+        <p class="muted" style="margin:.6rem 0 0">Aynı konum bir oyunda iki kez kullanılamaz; başka round'da kullanılan konumlar listede pasif görünür.</p></div>
+      ${game.matches.length ? `<table class="adm-table"><thead><tr><th>Round</th><th>Oyuncular</th><th>Konum</th><th>Durum</th></tr></thead><tbody>
+        ${game.matches.map((m, i) => `<tr><td><b>${m.isFinal ? '👑 Final' : 'R' + m.no}</b></td><td>${m.players.map(pid => esc(nameOf(pid))).join(' vs ')}</td><td class="sensitive"><select data-i="${i}" ${m.status === 'done' ? 'disabled' : ''} style="max-width:34rem">${opts(m)}</select></td><td>${status(m)}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="muted">Kura çekildikten sonra round–konum eşleşmeleri burada görünür.</p>'}`;
+    $('#adm-assign').value = settings.assignMode;
+    $('#adm-assign').onchange = e => { settings.assignMode = e.target.value; save(); UI.toast('Atama modu kaydedildi'); };
+    $('#adm-reassign').onclick = async () => {
+      if (!await UI.confirm('Henüz oynanmamış round\'ların konumları seçili moda göre yeniden atansın mı?')) return;
+      Pairing.assignLocations(game.matches, settings.assignMode === 'random' ? 'random' : 'sequential');
+      Flow._prep = null; save(); this.render(); UI.toast('🔁 Konumlar yeniden atandı', 'ok');
+    };
+    $('#adm-finalloc').onchange = e => { settings.finalLocationId = e.target.value; save(); };
+    $$('#adm-body select[data-i]').forEach(s => s.onchange = async () => {
+      const m = game.matches[+s.dataset.i];
+      if (Object.keys(m.results).length && !await UI.confirm('Bu round\'da tahmin yapılmış. Konum değişirse round baştan oynanır. Devam?')) { this.render(); return; }
+      Flow.changeLocation(m, s.value || null); this.render();
+    });
+  },
+
+  /* ---------- Ayarlar ---------- */
+  tab_settings() {
+    const stateTxt = { ready: '✅ Yüklü', loading: '⏳ Yükleniyor', error: '❌ Yüklenemedi', auth: '❌ Key geçersiz', nokey: '⚠️ Key yok', idle: '—' }[MapsLoader.state];
+    $('#adm-body').innerHTML = `<div class="sect glass"><h3>🎛️ Oyun ayarları</h3><div class="form-grid">${SETTING_FIELDS.map(f => {
+      const v = settings[f.k];
+      if (f.type === 'checkbox') return `<label class="chk"><span class="switch"><input type="checkbox" data-k="${f.k}" ${v ? 'checked' : ''}><span></span></span> ${f.label}</label>`;
+      if (f.type === 'select') return `<label>${f.label}<select data-k="${f.k}">${f.options.map(([val, l]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${l}</option>`).join('')}</select>${f.hint ? `<small>${f.hint}</small>` : ''}</label>`;
+      return `<label>${f.label}<input type="number" data-k="${f.k}" value="${esc(v)}" min="${f.min}" max="${f.max}" step="1">${f.hint ? `<small>${f.hint}</small>` : ''}</label>`;
+    }).join('')}</div>
+      <div class="row" style="margin-top:1rem"><button class="btn" id="set-save">💾 Kaydet</button><button class="btn ghost" id="set-reset">↺ CONFIG varsayılanlarına dön</button></div>
+      <p class="muted" style="margin:.6rem 0 0">Süre değişiklikleri bir sonraki turdan itibaren geçerli olur. Puan ayarları yalnızca bundan sonra açıklanan round'ları etkiler.</p></div>
+      <div class="sect glass"><h3>🔑 Google Maps API key</h3>
+        <div class="row"><input type="password" id="set-key" style="flex:1;min-width:20rem" value="${esc(settings.apiKey || '')}" placeholder="${CONFIG.GOOGLE_MAPS_API_KEY ? 'Dosyadaki CONFIG key\'i kullanılıyor' : 'AIza…'}" autocomplete="off"><button class="btn sm" id="set-key-save">Kaydet ve yeniden yükle</button></div>
+        <small class="muted">Durum: ${stateTxt}. Boş bırakırsan dosyadaki CONFIG.GOOGLE_MAPS_API_KEY kullanılır. Oyun durumu korunur.</small></div>
+      <div class="sect glass"><h3>🗺️ CARTO harita karoları key'i (opsiyonel)</h3>
+        <div class="row"><input type="password" id="set-carto" style="flex:1;min-width:20rem" value="${esc(settings.cartoKey || '')}" placeholder="${CONFIG.CARTO_API_KEY ? 'Dosyadaki CONFIG key\'i kullanılıyor' : 'carto.com/basemaps/apikey adresinden ücretsiz alınır'}" autocomplete="off"><button class="btn sm" id="set-carto-save">Kaydet ve yeniden yükle</button></div>
+        <small class="muted">Şu an kullanılan karolar: <b>${cartoKey() ? 'CARTO Voyager' : 'Esri World Street Map'}</b>. Key yoksa CARTO karoları "API KEY REQUIRED" filigranlı gelir; bu yüzden key'siz Esri karoları kullanılır.</small></div>`;
+    $('#set-carto-save').onclick = () => { settings.cartoKey = $('#set-carto').value.trim(); save(); location.reload(); };
+    $('#set-save').onclick = () => {
+      $$('#adm-body [data-k]').forEach(inp => {
+        const k = inp.dataset.k, f = SETTING_FIELDS.find(x => x.k === k); if (!f) return;
+        if (f.type === 'checkbox') settings[k] = inp.checked;
+        else if (f.type === 'select') settings[k] = inp.value;
+        else { const v = num(inp.value); if (isFinite(v)) settings[k] = clamp(Math.round(v), f.min, f.max); }
+      });
+      if (!game.draw) game.oddMode = settings.oddMode;
+      save(); UI.updateTopbar(); UI.toast('💾 Ayarlar kaydedildi', 'ok'); this.render();
+    };
+    $('#set-reset').onclick = async () => {
+      if (!await UI.confirm('Tüm oyun ayarları dosyadaki CONFIG değerlerine dönsün mü?')) return;
+      SETTING_KEYS.forEach(k => { settings[k] = CONFIG[k]; }); save(); UI.updateTopbar(); this.render(); UI.toast('↺ Varsayılanlar yüklendi');
+    };
+    $('#set-key-save').onclick = () => { settings.apiKey = $('#set-key').value.trim(); save(); location.reload(); };
+  },
+
+  /* ---------- Round yönetimi ---------- */
+  tab_manage() {
+    const cur = Flow.match();
+    const rowStatus = m => m.status === 'done' ? '<span class="pill ok">Oynandı</span>' : m.status === 'playing' ? '<span class="pill live">Oynanıyor</span>' : '<span class="pill wait">Bekliyor</span>';
+    $('#adm-body').innerHTML = `
+      <div class="sect glass"><h3>📍 Durum</h3>
+        <div class="row">Faz: <span class="pill live">${phaseLabel()}</span> ${cur && gameInProgress() ? `• ${esc(Flow.roundLabel(cur))} • Sıradaki oyuncu: <b>${esc(nameOf(Flow.pid()))}</b>` : ''}</div>
+        <div class="row" style="margin-top:.6rem"><button class="btn sm ghost" id="mg-restart" ${['READY', 'EXPLORE', 'GUESS'].includes(game.phase) ? '' : 'disabled'}>↺ Mevcut oyuncunun turunu yeniden başlat</button><button class="btn sm danger" id="mg-new">🆕 Yeni Oyun</button></div></div>
+      <div class="sect glass"><h3>🧾 Round'lar — teknik aksaklıkta "geçersiz say / tekrar oynat"</h3>
+      ${game.matches.length ? `<table class="adm-table"><thead><tr><th>Round</th><th>Oyuncular & sonuç</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>${game.matches.map((m, i) => `<tr><td><b>${m.isFinal ? '👑 Final' : 'R' + m.no}</b></td><td>${m.players.map(pid => { const r = m.results[pid]; return `${esc(nameOf(pid))}${m.status === 'done' && r ? ` <span class="muted">(${r.distKm == null ? 'tahmin yok' : fmtDist(r.distKm)} • ${fmtPts(r.total)}${r.win ? ' 🏆' : ''})</span>` : ''}`; }).join(' &nbsp;vs&nbsp; ')}</td><td>${rowStatus(m)}</td><td><button class="ibtn" data-replay="${i}" ${m.status === 'pending' && m !== cur ? 'disabled' : ''}>↺ Geçersiz say / tekrar oynat</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">Henüz kura çekilmedi.</p>'}</div>
+      <div class="sect glass"><h3>✏️ İsim düzeltme</h3>${game.players.length ? `<div class="player-edit">${game.players.map(p => `<input type="text" data-pid="${esc(p.id)}" value="${esc(p.name)}">`).join('')}</div><small class="muted">Değiştirip başka bir alana tıkla — anında kaydedilir.</small>` : '<p class="muted">Kayıtlı oyuncu yok.</p>'}
+        ${game.byeId ? `<p>🛋️ Bay geçen: <b>${esc(nameOf(game.byeId))}</b></p>` : ''}</div>`;
+    $('#mg-restart').onclick = () => { this.close(); Flow.restartTurn(); };
+    $('#mg-new').onclick = () => Flow.newGameAsk();
+    $$('#adm-body [data-replay]').forEach(b => b.onclick = async () => {
+      const m = game.matches[+b.dataset.replay];
+      if (!await UI.confirm(`<b>${m.isFinal ? 'Final' : 'Round ' + m.no}</b> sonuçları silinecek ve round baştan oynanacak (${m.players.map(pid => esc(nameOf(pid))).join(' vs ')}). Devam?`, { danger: true, ok: '↺ Tekrar oynat' })) return;
+      this.close(); Flow.replayMatch(m);
+    });
+    $$('#adm-body [data-pid]').forEach(inp => inp.onchange = () => {
+      const p = playerById(inp.dataset.pid); if (!p) return;
+      const v = inp.value.trim().replace(/\s+/g, ' ');
+      if (!v) { inp.value = p.name; return; }
+      if (game.players.some(o => o !== p && trLower(o.name) === trLower(v))) { UI.toast('Bu isim zaten var', 'err'); inp.value = p.name; return; }
+      p.name = v; game.draftText = game.players.map(x => x.name).join('\n'); save(); UI.toast('✏️ İsim güncellendi', 'ok');
+    });
+  },
+
+  /* ---------- Yedekleme ---------- */
+  tab_backup() {
+    $('#adm-body').innerHTML = `
+      <div class="sect glass"><h3>⬇️ Dışa aktar</h3><div class="row">
+        <button class="btn sm" id="bk-loc">📍 Konum havuzu (JSON)</button>
+        <button class="btn sm" id="bk-all">💾 Tam yedek: ayarlar + konumlar + oyun durumu (JSON)</button></div>
+        <small class="muted">Güvenlik için API key yedeğe yazılmaz.</small></div>
+      <div class="sect glass"><h3>⬆️ İçe aktar</h3>
+        <input type="file" id="bk-file" accept="application/json,.json">
+        <p class="muted">Konum listesi (dizi veya {"locations":[…]}) ya da tam yedek dosyası olabilir. Tam yedek yüklenince sayfa yenilenir ve "kaldığın yerden devam" sorulur.</p></div>
+      <div class="sect glass"><h3>🧨 Sıfırlama</h3><div class="row">
+        <button class="btn sm danger" id="bk-new">🆕 Yeni Oyun (konumlar ve ayarlar kalır)</button>
+        <button class="btn sm ghost" id="bk-wipe">🧨 Tüm verileri sil (fabrika ayarı)</button></div></div>`;
+    $('#bk-loc').onclick = () => download(`geoduello-konumlar-${stamp()}.json`, { type: 'geoduello-locations', version: 1, exportedAt: new Date().toISOString(), locations });
+    $('#bk-all').onclick = () => download(`geoduello-yedek-${stamp()}.json`, { type: 'geoduello-backup', version: 1, exportedAt: new Date().toISOString(), settings: { ...settings, apiKey: '', cartoKey: '' }, locations, game });
+    $('#bk-file').onchange = e => { const f = e.target.files[0]; if (f) this.importFile(f); e.target.value = ''; };
+    $('#bk-new').onclick = () => Flow.newGameAsk();
+    $('#bk-wipe').onclick = async () => {
+      if (!await UI.confirm('Ayarlar, API key, konum havuzu ve oyun durumu dahil HER ŞEY silinecek. Emin misin?', { danger: true, ok: '🧨 Hepsini sil' })) return;
+      Object.values(LS).forEach(k => Storage.remove(k)); location.reload();
+    };
+  },
+  async importFile(file) {
+    let j;
+    try { j = JSON.parse(await file.text()); } catch (e) { UI.alert('Dosya okunamadı: geçerli bir JSON değil.', '⬆️ İçe aktarma hatası'); return; }
+    if (j && j.type === 'geoduello-backup') {
+      if (!await UI.confirm('Tam yedek yüklenecek: mevcut ayarlar, konumlar ve oyun durumu değiştirilecek. Devam?', { danger: true, ok: 'Yükle' })) return;
+      const key = settings.apiKey;
+      if (j.settings && typeof j.settings === 'object') { const ck = settings.cartoKey; const s = Object.assign({}, settings); SETTING_KEYS.concat(['finalLocationId']).forEach(k => { if (k in j.settings) s[k] = j.settings[k]; }); settings = s; settings.apiKey = key; settings.cartoKey = ck; }
+      if (Array.isArray(j.locations)) { const c = sanitizeLocations(j.locations); if (c.length) locations = c; }
+      if (j.game && typeof j.game === 'object') game = Object.assign(newGame(), j.game);
+      save(); location.reload(); return;
+    }
+    const arr = Array.isArray(j) ? j : (j && Array.isArray(j.locations) ? j.locations : null);
+    if (!arr) { UI.alert('Tanınmayan dosya biçimi.', '⬆️ İçe aktarma'); return; }
+    const clean = sanitizeLocations(arr);
+    if (!clean.length) { UI.alert('Dosyada geçerli konum bulunamadı (lat/lng gerekli).', '⬆️ İçe aktarma'); return; }
+    const mode = await UI.modal({ title: '⬆️ Konumları içe aktar', html: `<p>${clean.length} geçerli konum bulundu. Ne yapılsın?</p>${game.matches.length ? '<p class="muted">Not: "Değiştir" seçilirse devam eden oyunun konum atamaları geçersiz kalabilir; Round–Konum sekmesinden yeniden ata.</p>' : ''}`,
+      buttons: [{ label: 'Vazgeç', value: null }, { label: '➕ Mevcutlara ekle', value: 'append' }, { label: '♻️ Mevcutları değiştir', value: 'replace', primary: true, cls: 'danger' }] });
+    if (!mode) return;
+    if (mode === 'replace') locations = clean;
+    else { const ids = new Set(locations.map(l => l.id)); clean.forEach(l => { if (ids.has(l.id)) l.id = uid(); locations.push(l); }); }
+    save(); this.render(); UI.toast(`✅ ${clean.length} konum içe aktarıldı`, 'ok');
+  },
+};
+
+/* =====================================================================
+   KLAVYE KISAYOLLARI
+   ===================================================================== */
+function onKey(e) {
+  if (e.ctrlKey && e.shiftKey && e.code === 'KeyA') { e.preventDefault(); e.stopPropagation(); Admin.toggle(); return; }
+  const t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+  if (e.key === 'Escape') { if (typing) t.blur(); UI.escape(); return; }
+  const top = UI.topModal();
+  if (top) { if (e.key === 'Enter' && !typing && top.primary) { e.preventDefault(); top.primary.click(); } return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (Admin.open || $('#scr-boot').classList.contains('active')) return;
+  if (e.code === 'Space' || e.key === ' ') {
+    e.preventDefault(); e.stopPropagation();
+    if (e.repeat) return;
+    if (LeaderOverlay.open) LeaderOverlay.close(); else Flow.advance();
+    return;
+  }
+  const actions = { p: () => Flow.togglePause(), t: () => Flow.addTime(), l: () => LeaderOverlay.toggle(), f: () => UI.fullscreen(), m: () => Sound.toggle(), r: () => Flow.restartTurnAsk(), h: () => UI.toggleHelp() };
+  const k = trLower(e.key);
+  if (actions[k]) { e.preventDefault(); e.stopPropagation(); if (!e.repeat) actions[k](); }
+}
+
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+function bindStatic() {
+  $('#tb-help').onclick = () => UI.toggleHelp();
+  $('#tb-lb').onclick = () => LeaderOverlay.toggle();
+  $('#tb-mute').onclick = () => Sound.toggle();
+  $('#tb-fs').onclick = () => UI.fullscreen();
+  $('#tb-admin').onclick = () => Admin.toggle();
+  $('#btn-setup').onclick = async () => {
+    if (gameInProgress()) {
+      if (!await UI.confirm('Devam eden oyun silinip yeni oyun kurulacak. Emin misin?', { danger: true, ok: 'Yeni oyun kur' })) return;
+      Flow.resetGame();
+    }
+    Flow.go('SETUP');
+  };
+  $('#btn-resume').onclick = () => Flow.resume();
+  const ta = $('#players-ta'); let saveT;
+  ta.addEventListener('input', () => { game.draftText = ta.value; SetupView.update(); clearTimeout(saveT); saveT = setTimeout(save, 400); });
+  $$('#odd-box input[name=oddmode]').forEach(r => r.addEventListener('change', () => { game.oddMode = r.value; save(); SetupView.update(); }));
+  $('#btn-setup-back').onclick = () => Flow.go('SPLASH');
+  $('#btn-to-draw').onclick = () => SetupView.submit();
+  $('#btn-draw-back').onclick = () => Flow.go('SETUP');
+  $('#btn-reshuffle').onclick = () => { game.draw = Pairing.build(game.players, game.oddMode); save(); DrawView.run(); };
+  $('#btn-start-game').onclick = () => Flow.startGame();
+  DrawView.bind();
+  $('#btn-home').onclick = () => SV.resetToStart();
+  $('#btn-rv-lb').onclick = () => Flow.go('LEADERBOARD');
+  $('#btn-rv-next').onclick = () => Flow.nextRound();
+  $('#btn-lb-next').onclick = () => Flow.nextRound();
+  $('#btn-lbo-close').onclick = () => LeaderOverlay.close();
+  // Tarayıcı ses kısıtlaması: ilk etkileşimde ses motorunu aç
+  const unlock = () => { Sound.ensure(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+  window.addEventListener('pointerdown', unlock); window.addEventListener('keydown', unlock);
+  // Tıklanan buton odakta kalırsa Space onu tekrar tetiklemesin
+  document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('button'); if (b && !b.closest('.modal')) setTimeout(() => b.blur(), 0); });
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('keyup', e => { if (e.code === 'Space' && document.activeElement && document.activeElement.tagName === 'BUTTON') e.preventDefault(); }, true);
+  let rT; window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { if (game.phase === 'LEADERBOARD') Leaderboard.render($('#lb-page'), { animate: false }); if (LeaderOverlay.open) Leaderboard.render($('#lb-overlay'), { animate: false }); }, 250); });
+}
+
+const Boot = {
+  async start() {
+    bindStatic(); Globe.start(); UI.updateTopbar();
+    if (!window.L) return this.error('Harita kütüphanesi (Leaflet) yüklenemedi.', 'İnternet bağlantını kontrol et. Leaflet cdnjs.cloudflare.com üzerinden yükleniyor.');
+    // (açılış bildirimi kapatıldı) if (location.protocol === 'file:') setTimeout(() => UI.toast('⚠️ Dosya doğrudan açılmış (file://). Google Maps için <b>python -m http.server</b> ile localhost üzerinden aç.', 'warn', 8000), 600);
+    this.loading();
+    try { await MapsLoader.load(); }
+    catch (e) {
+      if (MapsLoader.state === 'auth') return;
+      if (!apiKey()) {
+        // Key'siz modda servis yüklenemese de kayıtlı pano ID'li konumlarla oynanabilir
+        // (açılış bildirimi kapatıldı) UI.toast('⚠️ Google Maps servisi yüklenemedi — yalnızca hazır konumlar kullanılabilir', 'warn', 6000);
+        return this.ready();
+      }
+      return this.error('Google Maps yüklenemedi.', e.message === 'timeout'
+        ? 'Bağlantı zaman aşımına uğradı. İnternet bağlantını kontrol et.'
+        : 'İnternet bağlantını, API key\'i ve key kısıtlamalarını (HTTP yönlendiren adresleri) kontrol et.');
+    }
+    if (MapsLoader.state === 'auth') return;
+    SV.ensureService();
+    // (açılış bildirimi kapatıldı) if (!apiKey()) setTimeout(() => UI.toast('🔓 Key\'siz mod: Street View gömülü (embed) olarak açılır. Hareket sınırı için API key önerilir (⚙️ Ayarlar).', 'info', 6000), 800);
+    this.ready();
+  },
+  loading() { UI.show('scr-boot'); $('#scr-boot').innerHTML = '<div class="spinner"></div><div class="eyebrow">🌍 Google Maps yükleniyor…</div>'; },
+  async ready() {
+    if (MapsLoader.state === 'auth') return;
+    if (!gameInProgress()) { game.phase = 'SPLASH'; Flow.go('SPLASH'); return; }
+    Screens.SPLASH();
+    const done = regularMatches().filter(m => m.status === 'done').length;
+    const yes = await UI.confirm(`Kayıtlı bir oyun bulundu: <b>${game.players.length} oyuncu</b>${game.matches.length ? `, ${done} / ${regularMatches().length} round oynandı` : ' (kura aşamasında)'}.<br><br>Kaldığın yerden devam etmek ister misin?`, { title: '⏯ Kaldığın yerden devam et?', ok: '▶ Devam Et', cancel: '🆕 Yeni Oyun' });
+    if (MapsLoader.state === 'auth') return;
+    if (yes) return Flow.resume();
+    if (await UI.confirm('Kayıtlı oyun silinecek. Konum havuzu ve ayarlar korunur. Emin misin?', { danger: true, ok: 'Evet, yeni oyun' })) { Flow.resetGame(); Flow.go('SPLASH'); }
+    else Flow.resume();
+  },
+  apiSetup(invalid) {
+    UI.show('scr-boot');
+    const origin = location.origin && location.origin !== 'null' ? location.origin : 'http://localhost:8000';
+    $('#scr-boot').innerHTML = `<div class="boot-card glass">
+      <div class="eyebrow">Kurulum</div><h1>🔑 Google Maps API key ${invalid ? 'geçersiz' : 'gerekli'}</h1>
+      ${invalid ? `<div class="err-box">Google bu anahtarı reddetti. Anahtarın doğru olduğundan, <b>Maps JavaScript API</b>'nin etkin olduğundan, faturalandırmanın bağlı olduğundan ve HTTP yönlendiren kısıtlamasında <code>${esc(origin)}/*</code> adresinin bulunduğundan emin ol.</div>` : ''}
+      <ol>
+        <li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>'da yeni bir proje oluştur.</li>
+        <li>Projeye bir <b>faturalandırma hesabı</b> bağla (aylık ücretsiz kullanım kotası var).</li>
+        <li><b>API'ler ve Hizmetler → Kitaplık</b> bölümünden <b>Maps JavaScript API</b>'yi etkinleştir.</li>
+        <li><b>Kimlik Bilgileri → Kimlik bilgisi oluştur → API anahtarı</b>.</li>
+        <li>Önerilen kısıtlama: <i>Web siteleri</i> → <code>${esc(origin)}/*</code>; API kısıtlaması → Maps JavaScript API.</li>
+        <li>Anahtarı aşağıya yapıştır <span class="muted">(ya da dosyadaki <code>CONFIG.GOOGLE_MAPS_API_KEY</code> alanına yaz)</span>.</li>
+      </ol>
+      <div class="muted">Çalıştırma: bu klasörde <code>python -m http.server 8000</code> → tarayıcıda <code>http://localhost:8000/index.html</code></div>
+      <div class="key-row"><input type="password" id="key-inp" placeholder="AIza…" value="${esc(settings.apiKey || '')}" autocomplete="off" spellcheck="false"><button class="btn" id="key-save">💾 Kaydet ve Başlat</button></div>
+      ${location.protocol === 'file:' ? '<div class="err-box" style="margin-top:1rem">⚠️ Sayfa file:// ile açılmış. Google Maps key kısıtlamaları nedeniyle localhost üzerinden açman gerekir.</div>' : ''}
+    </div>`;
+    $('#key-save').onclick = () => { const v = $('#key-inp').value.trim(); if (!v) { UI.toast('Key boş olamaz', 'err'); return; } settings.apiKey = v; save(); location.reload(); };
+    $('#key-inp').addEventListener('keydown', e => { if (e.key === 'Enter') $('#key-save').click(); });
+  },
+  error(title, detail) {
+    UI.show('scr-boot');
+    $('#scr-boot').innerHTML = `<div class="boot-card glass" style="text-align:center"><div style="font-size:5rem">🛰️</div><h1>${esc(title)}</h1><div class="err-box" style="text-align:left">${detail}</div>
+      <div class="row" style="justify-content:center"><button class="btn lg" id="err-retry">🔁 Tekrar dene</button><button class="btn ghost" id="err-key">🔑 API key'i değiştir</button></div></div>`;
+    $('#err-retry').onclick = () => location.reload();
+    $('#err-key').onclick = () => this.apiSetup(false);
+  },
+};
+
+Boot.start();
+</script>
+</body>
+</html>
